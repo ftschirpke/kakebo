@@ -1,3 +1,4 @@
+use ratatui::Frame;
 use thiserror::Error;
 
 pub mod actions;
@@ -6,7 +7,7 @@ pub mod table;
 
 pub trait TuiWidget {
     fn handle_events(&mut self) -> Option<actions::TuiAction>;
-    // fn render(&self);
+    fn render(&mut self, frame: &mut Frame);
 }
 
 #[derive(Debug, Error)]

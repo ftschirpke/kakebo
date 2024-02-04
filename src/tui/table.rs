@@ -148,84 +148,6 @@ impl StatefulTable {
         }
     }
 
-    pub fn render(&mut self, frame: &mut Frame) {
-        let name_cell = Cell::new(self.data.name.clone());
-        let name_cell = self.style_cell(name_cell, TablePosition::Name);
-        let mut first_width = self.data.name.len();
-
-        let header_cells = once(name_cell).chain(
-            self.data
-                .col_names
-                .iter()
-                .map(|name| Cell::new(name.clone()))
-                .enumerate()
-                .map(|(col, cell)| self.style_cell(cell, TablePosition::Header(col))),
-        );
-        let header = Row::new(header_cells).bg(Color::DarkGray);
-        let mut other_widths: Vec<u16> = self
-            .data
-            .col_names
-            .iter()
-            .map(|col_name| col_name.len() as u16)
-            .collect();
-
-        let rows: Vec<Row> = (0..self.data.rows())
-            .map(|row| {
-                let row_name_cell = Cell::new(self.data.row_names[row].clone());
-                let row_name_cell = self.style_cell(row_name_cell, TablePosition::RowName(row));
-                first_width = first_width.max(self.data.row_names[row].len());
-
-                let cells = once(row_name_cell).chain((0..self.data.cols()).map(|col| {
-                    if let Some(val) = self.data.get(col, row) {
-                        let text = format_value(val);
-                        other_widths[col] = other_widths[col].max(text.len() as u16);
-                        let text = Line::from(text).alignment(Alignment::Right);
-                        let cell = Cell::new(text);
-                        self.style_cell(cell, TablePosition::Data { col, row })
-                    } else {
-                        unreachable!("Table index out of bounds")
-                    }
-                }));
-                Row::new(cells)
-            })
-            .collect();
-        let border_width = 1;
-        let first_width = once(self.data.name.len())
-            .chain(self.data.row_names.iter().map(String::len))
-            .max()
-            .unwrap_or(10) as u16;
-        let widths = once(Constraint::Length(first_width))
-            .chain(other_widths.iter().map(|&w| Constraint::Length(w)));
-        let table = Table::new(rows, widths)
-            .header(header)
-            .block(Block::default().borders(Borders::ALL).title("TITLE")); // TODO: set title correctly
-        let area = frame.size();
-        frame.render_widget(table, area);
-
-        let cursor_col = |col: usize| {
-            first_width
-                + border_width
-                + other_widths
-                    .into_iter()
-                    .map(|w| w + border_width)
-                    .take(col)
-                    .sum::<u16>()
-        };
-
-        let (cell_x, cell_y) = match self.pos {
-            TablePosition::Name => (0, 0),
-            TablePosition::Header(col) => (cursor_col(col), 0),
-            TablePosition::RowName(row) => (0, row as u16 + 1),
-            TablePosition::Data { col, row } => (cursor_col(col), row as u16 + 1),
-        };
-        if self.editor.is_editing() {
-            frame.set_cursor(
-                area.x + cell_x + self.editor.cursor_position() as u16 + 1,
-                area.y + cell_y + 1,
-            );
-        }
-    }
-
     fn style_cell<'a, 'b: 'a>(&'b self, cell: Cell<'a>, cell_pos: TablePosition) -> Cell<'a> {
         let default_style = Style::default();
         let style = match cell_pos {
@@ -468,5 +390,83 @@ impl TuiWidget for StatefulTable {
             }
         }
         None
+    }
+
+    fn render(&mut self, frame: &mut Frame) {
+        let name_cell = Cell::new(self.data.name.clone());
+        let name_cell = self.style_cell(name_cell, TablePosition::Name);
+        let mut first_width = self.data.name.len();
+
+        let header_cells = once(name_cell).chain(
+            self.data
+                .col_names
+                .iter()
+                .map(|name| Cell::new(name.clone()))
+                .enumerate()
+                .map(|(col, cell)| self.style_cell(cell, TablePosition::Header(col))),
+        );
+        let header = Row::new(header_cells).bg(Color::DarkGray);
+        let mut other_widths: Vec<u16> = self
+            .data
+            .col_names
+            .iter()
+            .map(|col_name| col_name.len() as u16)
+            .collect();
+
+        let rows: Vec<Row> = (0..self.data.rows())
+            .map(|row| {
+                let row_name_cell = Cell::new(self.data.row_names[row].clone());
+                let row_name_cell = self.style_cell(row_name_cell, TablePosition::RowName(row));
+                first_width = first_width.max(self.data.row_names[row].len());
+
+                let cells = once(row_name_cell).chain((0..self.data.cols()).map(|col| {
+                    if let Some(val) = self.data.get(col, row) {
+                        let text = format_value(val);
+                        other_widths[col] = other_widths[col].max(text.len() as u16);
+                        let text = Line::from(text).alignment(Alignment::Right);
+                        let cell = Cell::new(text);
+                        self.style_cell(cell, TablePosition::Data { col, row })
+                    } else {
+                        unreachable!("Table index out of bounds")
+                    }
+                }));
+                Row::new(cells)
+            })
+            .collect();
+        let border_width = 1;
+        let first_width = once(self.data.name.len())
+            .chain(self.data.row_names.iter().map(String::len))
+            .max()
+            .unwrap_or(10) as u16;
+        let widths = once(Constraint::Length(first_width))
+            .chain(other_widths.iter().map(|&w| Constraint::Length(w)));
+        let table = Table::new(rows, widths)
+            .header(header)
+            .block(Block::default().borders(Borders::ALL).title("TITLE")); // TODO: set title correctly
+        let area = frame.size();
+        frame.render_widget(table, area);
+
+        let cursor_col = |col: usize| {
+            first_width
+                + border_width
+                + other_widths
+                    .into_iter()
+                    .map(|w| w + border_width)
+                    .take(col)
+                    .sum::<u16>()
+        };
+
+        let (cell_x, cell_y) = match self.pos {
+            TablePosition::Name => (0, 0),
+            TablePosition::Header(col) => (cursor_col(col), 0),
+            TablePosition::RowName(row) => (0, row as u16 + 1),
+            TablePosition::Data { col, row } => (cursor_col(col), row as u16 + 1),
+        };
+        if self.editor.is_editing() {
+            frame.set_cursor(
+                area.x + cell_x + self.editor.cursor_position() as u16 + 1,
+                area.y + cell_y + 1,
+            );
+        }
     }
 }
