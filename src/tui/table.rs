@@ -73,22 +73,24 @@ impl TableData {
 
 #[derive(Debug)]
 pub struct StatefulTableBuilder {
+    name: String,
     data: TableData,
-    required: Vec<(usize, usize)>,
+    required_data_fields: Vec<(usize, usize)>,
     on_save: fn(&mut TableData),
 }
 
 impl Default for StatefulTableBuilder {
     fn default() -> Self {
-        Self::new()
+        Self::new(String::default())
     }
 }
 
 impl StatefulTableBuilder {
-    pub fn new() -> Self {
+    pub fn new(name: String) -> Self {
         Self {
+            name,
             data: TableData::default(),
-            required: Vec::new(),
+            required_data_fields: Vec::new(),
             on_save: |_: &mut TableData| {},
         }
     }
@@ -98,9 +100,19 @@ impl StatefulTableBuilder {
         self
     }
 
-    pub fn required(mut self, required: Vec<(usize, usize)>) -> Self {
-        self.required = required;
-        self
+    pub fn required_data_fields(
+        mut self,
+        required_fields: Vec<(usize, usize)>,
+    ) -> Result<Self, KakeboError> {
+        for (col, row) in &required_fields {
+            if *col >= self.data.cols() || *row >= self.data.rows() {
+                return Err(KakeboError::InvalidArgument(
+                    "Required data field is out of table data bounds".to_string(),
+                ));
+            }
+        }
+        self.required_data_fields = required_fields;
+        Ok(self)
     }
 
     pub fn on_save(mut self, on_save: fn(&mut TableData)) -> Self {
@@ -109,22 +121,32 @@ impl StatefulTableBuilder {
     }
 
     pub fn build(self) -> StatefulTable {
+        let first_required = self.required_data_fields.first();
+        let pos = if let Some(&(col, row)) = first_required {
+            TablePosition::Data { col, row }
+        } else {
+            TablePosition::Name
+        };
         StatefulTable {
+            name: self.name,
             data: self.data,
-            pos: TablePosition::Name,
+            pos,
             editor: Editor::default(),
-            required: self.required,
+            required_data_fields: self.required_data_fields,
             on_save: self.on_save,
         }
     }
 }
 
+const TABLE_COLUMN_SPACING: u16 = 2;
+
 #[derive(Debug)]
 pub struct StatefulTable {
+    name: String,
     data: TableData,
     pos: TablePosition,
     editor: Editor,
-    required: Vec<(usize, usize)>,
+    required_data_fields: Vec<(usize, usize)>,
     on_save: fn(&mut TableData),
 }
 
@@ -149,12 +171,18 @@ impl StatefulTable {
     }
 
     fn style_cell<'a, 'b: 'a>(&'b self, cell: Cell<'a>, cell_pos: TablePosition) -> Cell<'a> {
-        let default_style = Style::default();
+        let style = Style::default();
         let style = match cell_pos {
-            TablePosition::Name => default_style.fg(Color::White),
-            TablePosition::Header(_) => default_style.fg(Color::White),
-            TablePosition::RowName(_) => default_style.fg(Color::Gray),
-            TablePosition::Data { .. } => default_style,
+            TablePosition::Name => style.fg(Color::White),
+            TablePosition::Header(_) => style.fg(Color::White),
+            TablePosition::RowName(_) => style.bg(Color::Rgb(40, 40, 40)),
+            TablePosition::Data { col, row } => {
+                if self.required_data_fields.contains(&(col, row)) {
+                    style.bg(Color::Rgb(110, 60, 40))
+                } else {
+                    style
+                }
+            }
         };
         if cell_pos == self.pos {
             if self.editor.is_editing() {
@@ -199,6 +227,7 @@ impl StatefulTable {
                         Err(KakeboError::Parse(msg)) => {
                             // TODO: show error message
                         }
+                        _ => unreachable!(),
                     },
                 }
                 (self.on_save)(&mut self.data);
@@ -325,6 +354,16 @@ impl StatefulTable {
             }
         }
     }
+
+    fn required_index(&self) -> Option<usize> {
+        if let TablePosition::Data { col, row } = self.pos {
+            self.required_data_fields
+                .iter()
+                .position(|&(c, r)| c == col && r == row)
+        } else {
+            None
+        }
+    }
 }
 
 impl TuiWidget for StatefulTable {
@@ -385,7 +424,29 @@ impl TuiWidget for StatefulTable {
                     self.move_to_end();
                     self.start_editing(false);
                 }
-                TuiAction::Next | TuiAction::Prev => todo!(), // TODO: implement next/prev buttons
+                TuiAction::Next => {
+                    if !self.required_data_fields.is_empty() {
+                        let next_index = if let Some(index) = self.required_index() {
+                            (index + 1) % self.required_data_fields.len()
+                        } else {
+                            0
+                        };
+                        let (col, row) = self.required_data_fields[next_index];
+                        self.pos = TablePosition::Data { col, row };
+                    }
+                }
+                TuiAction::Prev => {
+                    if !self.required_data_fields.is_empty() {
+                        let prev_index = if let Some(index) = self.required_index() {
+                            (index - 1 + self.required_data_fields.len())
+                                % self.required_data_fields.len()
+                        } else {
+                            0
+                        };
+                        let (col, row) = self.required_data_fields[prev_index];
+                        self.pos = TablePosition::Data { col, row };
+                    }
+                }
                 TuiAction::Exit => return Some(TuiAction::Exit),
             }
         }
@@ -393,9 +454,9 @@ impl TuiWidget for StatefulTable {
     }
 
     fn render(&mut self, frame: &mut Frame) {
-        let name_cell = Cell::new(self.data.name.clone());
+        let name_cell = Cell::new(self.name.clone());
         let name_cell = self.style_cell(name_cell, TablePosition::Name);
-        let mut first_width = self.data.name.len();
+        let mut first_width = self.name.len() as u16;
 
         let header_cells = once(name_cell).chain(
             self.data
@@ -405,7 +466,7 @@ impl TuiWidget for StatefulTable {
                 .enumerate()
                 .map(|(col, cell)| self.style_cell(cell, TablePosition::Header(col))),
         );
-        let header = Row::new(header_cells).bg(Color::DarkGray);
+        let header = Row::new(header_cells).bg(Color::Rgb(80, 80, 80));
         let mut other_widths: Vec<u16> = self
             .data
             .col_names
@@ -417,7 +478,7 @@ impl TuiWidget for StatefulTable {
             .map(|row| {
                 let row_name_cell = Cell::new(self.data.row_names[row].clone());
                 let row_name_cell = self.style_cell(row_name_cell, TablePosition::RowName(row));
-                first_width = first_width.max(self.data.row_names[row].len());
+                first_width = first_width.max(self.data.row_names[row].len() as u16);
 
                 let cells = once(row_name_cell).chain((0..self.data.cols()).map(|col| {
                     if let Some(val) = self.data.get(col, row) {
@@ -433,25 +494,26 @@ impl TuiWidget for StatefulTable {
                 Row::new(cells)
             })
             .collect();
-        let border_width = 1;
-        let first_width = once(self.data.name.len())
-            .chain(self.data.row_names.iter().map(String::len))
-            .max()
-            .unwrap_or(10) as u16;
+
         let widths = once(Constraint::Length(first_width))
             .chain(other_widths.iter().map(|&w| Constraint::Length(w)));
         let table = Table::new(rows, widths)
             .header(header)
-            .block(Block::default().borders(Borders::ALL).title("TITLE")); // TODO: set title correctly
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(self.data.name.clone()),
+            )
+            .column_spacing(TABLE_COLUMN_SPACING);
         let area = frame.size();
         frame.render_widget(table, area);
 
         let cursor_col = |col: usize| {
             first_width
-                + border_width
+                + TABLE_COLUMN_SPACING
                 + other_widths
                     .into_iter()
-                    .map(|w| w + border_width)
+                    .map(|w| w + TABLE_COLUMN_SPACING)
                     .take(col)
                     .sum::<u16>()
         };

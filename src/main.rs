@@ -8,6 +8,7 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
+use self::errors::KakeboError;
 use self::tui::actions::TuiAction;
 use self::tui::table::{StatefulTable, StatefulTableBuilder, TableData};
 use crate::tui::TuiWidget;
@@ -17,21 +18,22 @@ mod format;
 mod parse;
 pub mod tui;
 
-fn create_table() -> StatefulTable {
-    StatefulTableBuilder::new()
+fn create_table() -> Result<StatefulTable, KakeboError> {
+    Ok(StatefulTableBuilder::new("Table kind".into())
         .table_data(
             TableData::new(
-                "Test Table".into(),
+                "User description of table".into(),
                 &["Col 1".into(), "Col 2".into()],
                 &["Row 1".into(), "Row 2".into()],
                 &[1, 2, 3, 4],
             )
             .unwrap(),
         )
-        .build()
+        .required_data_fields(vec![(0, 0), (1, 1)])?
+        .build())
 }
 
-fn main() -> Result<(), io::Error> {
+fn main() -> Result<(), KakeboError> {
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -40,7 +42,7 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
 
     // create app and run it
-    let mut stateful_table = create_table();
+    let mut stateful_table = create_table()?;
 
     loop {
         terminal.draw(|f| stateful_table.render(f))?;
