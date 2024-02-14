@@ -1,8 +1,8 @@
 use std::iter::once;
 
-use ratatui::layout::{Alignment, Constraint};
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 
@@ -14,20 +14,27 @@ use super::actions::{widget_action, widget_editing_action, EditingAction, TuiAct
 use super::editor::{CurrentReference, CurrentValue, Editor};
 use super::TuiWidget;
 
+const NUMBER_OF_BUTTONS: usize = 3;
+const BUTTON_LABELS: [&str; NUMBER_OF_BUTTONS] = ["Add Row", "Delete Last Row", "Confirm"];
+const BUTTON_ACTIONS: [TuiAction; NUMBER_OF_BUTTONS] =
+    [TuiAction::AddRow, TuiAction::RemoveRow, TuiAction::Exit];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TablePosition {
+pub enum TablePosition {
     Name,
-    Header(usize),
     RowName(usize),
     Data { col: usize, row: usize },
+    TotalRow(usize),
+    Button(usize),
 }
 
 #[derive(Debug, Default)]
 pub struct TableData {
     name: String,
     col_names: Box<[String]>,
-    row_names: Box<[String]>,
-    data: Box<[i32]>,
+    row_names: Vec<String>,
+    data: Vec<i32>,
+    total_row: Vec<i32>,
 }
 
 impl TableData {
@@ -40,11 +47,16 @@ impl TableData {
         if col_names.len() * row_names.len() != data.len() {
             return None;
         }
+        let mut total_row = vec![0; col_names.len()];
+        for (i, &val) in data.iter().enumerate() {
+            total_row[i % col_names.len()] += val;
+        }
         Some(Self {
             name,
             col_names: col_names.into(),
             row_names: row_names.into(),
             data: data.into(),
+            total_row,
         })
     }
 
@@ -59,7 +71,8 @@ impl TableData {
         if col >= self.cols() || row >= self.rows() {
             return None;
         }
-        Some(&mut self.data[row * self.cols() + col])
+        let idx = row * self.cols() + col;
+        Some(&mut self.data[idx])
     }
 
     pub fn cols(&self) -> usize {
@@ -69,14 +82,30 @@ impl TableData {
     pub fn rows(&self) -> usize {
         self.row_names.len()
     }
+
+    fn add_row(&mut self) {
+        let new_row = vec![0; self.cols()].into_boxed_slice();
+        self.row_names.push(String::default());
+        self.data = self.data.iter().chain(new_row.iter()).copied().collect();
+    }
+
+    fn remove_row(&mut self, row: usize) {
+        if self.rows() > 1 && row < self.rows() {
+            self.row_names.remove(row);
+            let row_index_range = row * self.cols()..(row + 1) * self.cols();
+            self.data.drain(row_index_range);
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct StatefulTableBuilder {
     name: String,
     data: TableData,
-    required_data_fields: Vec<(usize, usize)>,
-    on_save: fn(&mut TableData),
+    fixed_rows_number: usize,
+    editable_columns: Vec<usize>,
+    editable_total_fields: Vec<usize>,
+    on_save: fn(&mut TableData, TablePosition),
 }
 
 impl Default for StatefulTableBuilder {
@@ -90,8 +119,10 @@ impl StatefulTableBuilder {
         Self {
             name,
             data: TableData::default(),
-            required_data_fields: Vec::new(),
-            on_save: |_: &mut TableData| {},
+            fixed_rows_number: 0,
+            editable_columns: Vec::new(),
+            editable_total_fields: Vec::new(),
+            on_save: |_: &mut TableData, _: TablePosition| {},
         }
     }
 
@@ -100,39 +131,46 @@ impl StatefulTableBuilder {
         self
     }
 
-    pub fn required_data_fields(
-        mut self,
-        required_fields: Vec<(usize, usize)>,
-    ) -> Result<Self, KakeboError> {
-        for (col, row) in &required_fields {
-            if *col >= self.data.cols() || *row >= self.data.rows() {
-                return Err(KakeboError::InvalidArgument(
-                    "Required data field is out of table data bounds".to_string(),
-                ));
-            }
-        }
-        self.required_data_fields = required_fields;
-        Ok(self)
-    }
-
-    pub fn on_save(mut self, on_save: fn(&mut TableData)) -> Self {
+    pub fn on_save(mut self, on_save: fn(&mut TableData, TablePosition)) -> Self {
         self.on_save = on_save;
         self
     }
 
+    pub fn fixed_rows(mut self, number: usize) -> Self {
+        self.fixed_rows_number = number;
+        self
+    }
+
+    pub fn editable_columns(mut self, columns: impl IntoIterator<Item = usize>) -> Self {
+        self.editable_columns.extend(columns);
+        self
+    }
+
+    pub fn editable_column(mut self, column: usize) -> Self {
+        self.editable_columns.push(column);
+        self
+    }
+
+    pub fn editable_total_fields(mut self, fields: impl IntoIterator<Item = usize>) -> Self {
+        self.editable_total_fields.extend(fields);
+        self
+    }
+
+    pub fn editable_total_field(mut self, field: usize) -> Self {
+        self.editable_total_fields.push(field);
+        self
+    }
+
     pub fn build(self) -> StatefulTable {
-        let first_required = self.required_data_fields.first();
-        let pos = if let Some(&(col, row)) = first_required {
-            TablePosition::Data { col, row }
-        } else {
-            TablePosition::Name
-        };
+        let pos = TablePosition::Name;
         StatefulTable {
             name: self.name,
             data: self.data,
             pos,
             editor: Editor::default(),
-            required_data_fields: self.required_data_fields,
+            fixed_rows_number: self.fixed_rows_number,
+            editable_columns: self.editable_columns,
+            editable_total_fields: self.editable_total_fields,
             on_save: self.on_save,
         }
     }
@@ -146,8 +184,10 @@ pub struct StatefulTable {
     data: TableData,
     pos: TablePosition,
     editor: Editor,
-    required_data_fields: Vec<(usize, usize)>,
-    on_save: fn(&mut TableData),
+    fixed_rows_number: usize,
+    editable_columns: Vec<usize>,
+    editable_total_fields: Vec<usize>,
+    on_save: fn(&mut TableData, TablePosition),
 }
 
 impl StatefulTable {
@@ -157,43 +197,72 @@ impl StatefulTable {
 
     pub fn current(&mut self) -> Option<CurrentReference> {
         match self.pos {
-            TablePosition::Name => None,
-            TablePosition::Header(col) => {
-                Some(CurrentReference::Str(&mut self.data.col_names[col]))
-            }
+            TablePosition::Name => Some(CurrentReference::Str(&mut self.data.name)),
             TablePosition::RowName(row) => {
                 Some(CurrentReference::Str(&mut self.data.row_names[row]))
             }
             TablePosition::Data { col, row } => {
                 Some(CurrentReference::Data(self.data.get_mut(col, row)?))
             }
+            TablePosition::TotalRow(col) => {
+                Some(CurrentReference::Data(self.data.total_row.get_mut(col)?))
+            }
+            TablePosition::Button(_) => None,
         }
     }
 
-    fn style_cell<'a, 'b: 'a>(&'b self, cell: Cell<'a>, cell_pos: TablePosition) -> Cell<'a> {
-        let style = Style::default();
-        let style = match cell_pos {
-            TablePosition::Name => style.fg(Color::White),
-            TablePosition::Header(_) => style.fg(Color::White),
+    fn is_editable(&self, pos: &TablePosition) -> bool {
+        match *pos {
+            TablePosition::Name => true,
+            TablePosition::RowName(row) => row >= self.fixed_rows_number,
+            TablePosition::Data { col, .. } => self.editable_columns.contains(&col),
+            TablePosition::TotalRow(col) => self.editable_total_fields.contains(&col),
+            TablePosition::Button(_) => false,
+        }
+    }
+
+    fn style_span<'a, 'b: 'a>(&'b self, span: Span<'a>, span_pos: TablePosition) -> Span<'a> {
+        let mut style = Style::default();
+        style = match span_pos {
             TablePosition::RowName(_) => style.bg(Color::Rgb(40, 40, 40)),
-            TablePosition::Data { col, row } => {
-                if self.required_data_fields.contains(&(col, row)) {
+            TablePosition::Data { .. } => {
+                if self.is_editable(&span_pos) {
                     style.bg(Color::Rgb(110, 60, 40))
                 } else {
                     style
                 }
             }
+            TablePosition::TotalRow(_) => style.bg(Color::Rgb(80, 80, 80)),
+            TablePosition::Name => style,
+            TablePosition::Button(_) => style.bg(Color::Rgb(80, 0, 0)),
         };
-        if cell_pos == self.pos {
-            if self.editor.is_editing() {
-                let style = style.fg(Color::DarkGray).bg(Color::Gray);
-                let cell = cell.content(self.editor.value());
-                return cell.style(style);
-            } else {
-                return cell.style(style.add_modifier(Modifier::UNDERLINED));
-            }
+        if span_pos == self.pos {
+            style = style.add_modifier(Modifier::UNDERLINED)
         }
-        cell.style(style)
+        span.style(style)
+    }
+
+    fn span_to_line<'a, 'b: 'a>(&'b self, span: Span<'a>, span_pos: TablePosition) -> Line<'a> {
+        let style = Style::default();
+        let span = self.style_span(span, span_pos);
+        if span_pos == self.pos && self.editor.is_editing() {
+            let style = style
+                .fg(Color::DarkGray)
+                .bg(Color::Gray)
+                .remove_modifier(Modifier::UNDERLINED);
+            let span = span.content(self.editor.value());
+            let span = span.style(style);
+            let style = span.style;
+            return Line::from(span).style(style);
+        }
+
+        let style = span.style;
+        let line = Line::from(span).style(style);
+        if let TablePosition::Data { .. } = span_pos {
+            line.right_aligned()
+        } else {
+            line
+        }
     }
 
     fn start_editing(&mut self, delete: bool) {
@@ -230,14 +299,14 @@ impl StatefulTable {
                         _ => unreachable!(),
                     },
                 }
-                (self.on_save)(&mut self.data);
+                (self.on_save)(&mut self.data, self.pos);
             }
         }
     }
 
     fn above(&self, pos: TablePosition) -> TablePosition {
         match pos {
-            TablePosition::Name | TablePosition::Header(_) => pos,
+            TablePosition::Name => pos,
             TablePosition::RowName(row) => {
                 if row == 0 {
                     TablePosition::Name
@@ -247,45 +316,50 @@ impl StatefulTable {
             }
             TablePosition::Data { col, row } => {
                 if row == 0 {
-                    TablePosition::Header(col)
+                    TablePosition::Name
                 } else {
                     TablePosition::Data { col, row: row - 1 }
                 }
+            }
+            TablePosition::TotalRow(col) => TablePosition::Data {
+                col,
+                row: self.data.rows() - 1,
+            },
+            TablePosition::Button(col) => {
+                let new_col = col.min(self.data.cols() - 1);
+                TablePosition::TotalRow(new_col)
             }
         }
     }
 
     fn below(&self, pos: TablePosition) -> TablePosition {
         match pos {
-            TablePosition::Name => TablePosition::RowName(0),
-            TablePosition::Header(col) => TablePosition::Data { col, row: 0 },
+            TablePosition::Name => TablePosition::Data { col: 0, row: 0 },
             TablePosition::RowName(row) => {
                 if row + 1 == self.data.rows() {
-                    pos
+                    TablePosition::TotalRow(0)
                 } else {
                     TablePosition::RowName(row + 1)
                 }
             }
             TablePosition::Data { col, row } => {
                 if row + 1 == self.data.rows() {
-                    pos
+                    TablePosition::TotalRow(col)
                 } else {
                     TablePosition::Data { col, row: row + 1 }
                 }
             }
+            TablePosition::TotalRow(col) => {
+                let new_col = col.min(NUMBER_OF_BUTTONS - 1);
+                TablePosition::Button(new_col)
+            }
+            TablePosition::Button(_) => pos,
         }
     }
 
     fn left_of(&self, pos: TablePosition) -> TablePosition {
         match pos {
             TablePosition::Name | TablePosition::RowName(_) => pos,
-            TablePosition::Header(col) => {
-                if col == 0 {
-                    TablePosition::Name
-                } else {
-                    TablePosition::Header(col - 1)
-                }
-            }
             TablePosition::Data { col, row } => {
                 if col == 0 {
                     TablePosition::RowName(row)
@@ -293,19 +367,26 @@ impl StatefulTable {
                     TablePosition::Data { col: col - 1, row }
                 }
             }
+            TablePosition::TotalRow(col) => {
+                if col == 0 {
+                    pos
+                } else {
+                    TablePosition::TotalRow(col - 1)
+                }
+            }
+            TablePosition::Button(col) => {
+                if col == 0 {
+                    pos
+                } else {
+                    TablePosition::Button(col - 1)
+                }
+            }
         }
     }
 
     fn right_of(&self, pos: TablePosition) -> TablePosition {
         match pos {
-            TablePosition::Name => TablePosition::Header(0),
-            TablePosition::Header(col) => {
-                if col + 1 == self.data.cols() {
-                    pos
-                } else {
-                    TablePosition::Header(col + 1)
-                }
-            }
+            TablePosition::Name => pos,
             TablePosition::RowName(row) => TablePosition::Data { col: 0, row },
             TablePosition::Data { col, row } => {
                 if col + 1 == self.data.cols() {
@@ -314,54 +395,50 @@ impl StatefulTable {
                     TablePosition::Data { col: col + 1, row }
                 }
             }
+            TablePosition::TotalRow(col) => {
+                if col + 1 == self.data.cols() {
+                    pos
+                } else {
+                    TablePosition::TotalRow(col + 1)
+                }
+            }
+            TablePosition::Button(col) => {
+                if col + 1 == NUMBER_OF_BUTTONS {
+                    pos
+                } else {
+                    TablePosition::Button(col + 1)
+                }
+            }
         }
     }
 
     fn move_to_top(&mut self) {
-        match self.pos {
-            TablePosition::Name | TablePosition::Header(_) => {}
-            TablePosition::RowName(_) => self.pos = TablePosition::Name,
-            TablePosition::Data { col, .. } => self.pos = TablePosition::Header(col),
-        }
+        self.pos = TablePosition::Name
     }
 
     fn move_to_bottom(&mut self) {
-        let row = self.data.rows() - 1;
-        match self.pos {
-            TablePosition::Name | TablePosition::RowName(_) => {
-                self.pos = TablePosition::RowName(row)
-            }
-            TablePosition::Header(col) | TablePosition::Data { col, .. } => {
-                self.pos = TablePosition::Data { col, row }
-            }
-        }
+        let new_col = NUMBER_OF_BUTTONS.min(self.data.cols() - 1);
+        self.pos = TablePosition::Button(new_col)
     }
 
     fn move_to_start(&mut self) {
         match self.pos {
             TablePosition::Name | TablePosition::RowName(_) => {}
-            TablePosition::Header(_) => self.pos = TablePosition::Name,
             TablePosition::Data { row, .. } => self.pos = TablePosition::RowName(row),
+            TablePosition::TotalRow(_) => self.pos = TablePosition::TotalRow(0),
+            TablePosition::Button(_) => self.pos = TablePosition::Button(0),
         }
     }
 
     fn move_to_end(&mut self) {
-        let col = self.data.cols() - 1;
+        let last_col = self.data.cols() - 1;
         match self.pos {
-            TablePosition::Name | TablePosition::Header(_) => self.pos = TablePosition::Header(col),
+            TablePosition::Name => {}
             TablePosition::RowName(row) | TablePosition::Data { row, .. } => {
-                self.pos = TablePosition::Data { col, row }
+                self.pos = TablePosition::Data { col: last_col, row }
             }
-        }
-    }
-
-    fn required_index(&self) -> Option<usize> {
-        if let TablePosition::Data { col, row } = self.pos {
-            self.required_data_fields
-                .iter()
-                .position(|&(c, r)| c == col && r == row)
-        } else {
-            None
+            TablePosition::TotalRow(_) => self.pos = TablePosition::TotalRow(last_col),
+            TablePosition::Button(_) => self.pos = TablePosition::Button(NUMBER_OF_BUTTONS - 1),
         }
     }
 }
@@ -369,102 +446,114 @@ impl StatefulTable {
 impl TuiWidget for StatefulTable {
     fn handle_events(&mut self) -> Option<TuiAction> {
         if self.editor.is_editing() {
-            match widget_editing_action()? {
-                EditingAction::InsertChar(c) => self.editor.insert_char(c),
-                EditingAction::DeleteLeft => self.editor.delete_left(),
-                EditingAction::DeleteRight => self.editor.delete_right(),
-                EditingAction::MoveLeft => self.editor.move_left(),
-                EditingAction::MoveRight => self.editor.move_right(),
-                EditingAction::CancelEditing => self.cancel_editing(),
-                EditingAction::StopEditing => self.stop_editing(),
-            }
+            let editing_action = widget_editing_action()?;
+            self.perform_editing_action(editing_action);
+            None
         } else {
-            match widget_action()? {
-                TuiAction::MoveUp => self.pos = self.above(self.pos),
-                TuiAction::MoveDown => self.pos = self.below(self.pos),
-                TuiAction::MoveLeft => self.pos = self.left_of(self.pos),
-                TuiAction::MoveRight => self.pos = self.right_of(self.pos),
-                TuiAction::Edit => self.start_editing(false),
-                TuiAction::Replace => self.start_editing(true),
-                TuiAction::Delete => match self.current() {
-                    Some(CurrentReference::Str(s)) => *s = String::default(),
-                    Some(CurrentReference::Data(i)) => *i = 0,
-                    None => {}
-                },
-                TuiAction::Select => {
-                    match self.pos {
-                        TablePosition::Data { .. }
-                        | TablePosition::Header(_)
-                        | TablePosition::RowName(_) => {
-                            self.start_editing(false);
-                        }
-                        _ => {
-                            todo!(); // TODO: implement selecting buttons
-                        }
+            let tui_action = widget_action()?;
+            self.perform_tui_action(tui_action)
+        }
+    }
+
+    fn perform_editing_action(&mut self, action: EditingAction) {
+        match action {
+            EditingAction::InsertChar(c) => self.editor.insert_char(c),
+            EditingAction::DeleteLeft => self.editor.delete_left(),
+            EditingAction::DeleteRight => self.editor.delete_right(),
+            EditingAction::MoveLeft => self.editor.move_left(),
+            EditingAction::MoveRight => self.editor.move_right(),
+            EditingAction::CancelEditing => self.cancel_editing(),
+            EditingAction::StopEditing => self.stop_editing(),
+        }
+    }
+
+    fn perform_tui_action(&mut self, action: TuiAction) -> Option<TuiAction> {
+        match action {
+            TuiAction::MoveUp => self.pos = self.above(self.pos),
+            TuiAction::MoveDown => self.pos = self.below(self.pos),
+            TuiAction::MoveLeft => self.pos = self.left_of(self.pos),
+            TuiAction::MoveRight => self.pos = self.right_of(self.pos),
+            TuiAction::Edit => self.start_editing(false),
+            TuiAction::Replace => self.start_editing(true),
+            TuiAction::Delete => match self.current() {
+                Some(CurrentReference::Str(s)) => *s = String::default(),
+                Some(CurrentReference::Data(i)) => *i = 0,
+                None => {}
+            },
+            TuiAction::Select => {
+                if self.is_editable(&self.pos) {
+                    self.start_editing(true);
+                } else if let TablePosition::Button(button_num) = self.pos {
+                    let action = BUTTON_ACTIONS.get(button_num)?;
+                    if let TuiAction::RemoveRow = action {
+                        self.data.remove_row(self.data.rows() - 1);
+                    } else {
+                        return self.perform_tui_action(*action);
                     }
                 }
-                TuiAction::Copy => {
-                    let value: CurrentValue = self.current()?.into();
-                    self.editor.copy(value);
-                }
-                TuiAction::Paste => match (self.editor.paste()?, self.current()?) {
-                    (CurrentValue::Str(buf), CurrentReference::Str(s)) => *s = buf,
-                    (CurrentValue::Data(buf), CurrentReference::Data(s)) => *s = buf,
-                    _ => {}
-                },
-                TuiAction::ToTop => self.move_to_top(),
-                TuiAction::ToBottom => self.move_to_bottom(),
-                TuiAction::ToStart => self.move_to_start(),
-                TuiAction::ToEnd => self.move_to_end(),
-                TuiAction::EditStart => {
-                    self.move_to_start();
-                    self.start_editing(false);
-                }
-                TuiAction::EditEnd => {
-                    self.move_to_end();
-                    self.start_editing(false);
-                }
-                TuiAction::Next => {
-                    if !self.required_data_fields.is_empty() {
-                        let next_index = if let Some(index) = self.required_index() {
-                            (index + 1) % self.required_data_fields.len()
-                        } else {
-                            0
-                        };
-                        let (col, row) = self.required_data_fields[next_index];
-                        self.pos = TablePosition::Data { col, row };
-                    }
-                }
-                TuiAction::Prev => {
-                    if !self.required_data_fields.is_empty() {
-                        let prev_index = if let Some(index) = self.required_index() {
-                            (index - 1 + self.required_data_fields.len())
-                                % self.required_data_fields.len()
-                        } else {
-                            0
-                        };
-                        let (col, row) = self.required_data_fields[prev_index];
-                        self.pos = TablePosition::Data { col, row };
-                    }
-                }
-                TuiAction::Exit => return Some(TuiAction::Exit),
             }
+
+            TuiAction::Copy => {
+                let value: CurrentValue = self.current()?.into();
+                self.editor.copy(value);
+            }
+            TuiAction::Paste => match (self.editor.paste()?, self.current()?) {
+                (CurrentValue::Str(buf), CurrentReference::Str(s)) => *s = buf,
+                (CurrentValue::Data(buf), CurrentReference::Data(s)) => *s = buf,
+                _ => {}
+            },
+            TuiAction::ToTop => self.move_to_top(),
+            TuiAction::ToBottom => self.move_to_bottom(),
+            TuiAction::ToStart => self.move_to_start(),
+            TuiAction::ToEnd => self.move_to_end(),
+            TuiAction::EditStart => {
+                self.move_to_start();
+                self.start_editing(false);
+            }
+            TuiAction::EditEnd => {
+                self.move_to_end();
+                self.start_editing(false);
+            }
+            TuiAction::Next => {
+                todo!()
+            }
+            TuiAction::Prev => {
+                todo!()
+            }
+            TuiAction::Exit => return Some(TuiAction::Exit),
+            TuiAction::AddRow => self.data.add_row(),
+            TuiAction::RemoveRow => match self.pos {
+                TablePosition::Data { row, col } => {
+                    self.data.remove_row(row);
+                    if row >= self.data.rows() {
+                        self.pos = TablePosition::Data { col, row: row - 1 }
+                    }
+                }
+                TablePosition::RowName(row) => {
+                    self.data.remove_row(row);
+                    if row >= self.data.rows() {
+                        self.pos = TablePosition::RowName(row - 1)
+                    }
+                }
+                TablePosition::Name | TablePosition::TotalRow(_) | TablePosition::Button(_) => {}
+            },
         }
         None
     }
 
     fn render(&mut self, frame: &mut Frame) {
-        let name_cell = Cell::new(self.name.clone());
-        let name_cell = self.style_cell(name_cell, TablePosition::Name);
+        let name_span = Span::from(self.data.name.clone());
+        let name_line = self.span_to_line(name_span, TablePosition::Name);
+
+        let table_name_cell = Cell::new(self.name.clone());
+        let name_cell = table_name_cell.fg(Color::White);
         let mut first_width = self.name.len() as u16;
 
         let header_cells = once(name_cell).chain(
             self.data
                 .col_names
                 .iter()
-                .map(|name| Cell::new(name.clone()))
-                .enumerate()
-                .map(|(col, cell)| self.style_cell(cell, TablePosition::Header(col))),
+                .map(|name| Cell::new(name.clone()).fg(Color::White)),
         );
         let header = Row::new(header_cells).bg(Color::Rgb(80, 80, 80));
         let mut other_widths: Vec<u16> = self
@@ -474,39 +563,85 @@ impl TuiWidget for StatefulTable {
             .map(|col_name| col_name.len() as u16)
             .collect();
 
-        let rows: Vec<Row> = (0..self.data.rows())
+        let mut rows: Vec<Row> = (0..self.data.rows())
             .map(|row| {
-                let row_name_cell = Cell::new(self.data.row_names[row].clone());
-                let row_name_cell = self.style_cell(row_name_cell, TablePosition::RowName(row));
+                let row_name_span = Span::from(self.data.row_names[row].clone());
+                let row_name_line = self.span_to_line(row_name_span, TablePosition::RowName(row));
                 first_width = first_width.max(self.data.row_names[row].len() as u16);
 
-                let cells = once(row_name_cell).chain((0..self.data.cols()).map(|col| {
+                let lines = once(row_name_line).chain((0..self.data.cols()).map(|col| {
                     if let Some(val) = self.data.get(col, row) {
                         let text = format_value(val);
                         other_widths[col] = other_widths[col].max(text.len() as u16);
-                        let text = Line::from(text).alignment(Alignment::Right);
-                        let cell = Cell::new(text);
-                        self.style_cell(cell, TablePosition::Data { col, row })
+                        let span = Span::from(text);
+                        self.span_to_line(span, TablePosition::Data { col, row })
                     } else {
-                        unreachable!("Table index out of bounds")
+                        Line::from("")
                     }
                 }));
-                Row::new(cells)
+                Row::new(lines)
             })
             .collect();
+        let last_row = once(Line::from("Total").style(Style::default().fg(Color::White))).chain(
+            self.data.total_row.iter().enumerate().map(|(col, &val)| {
+                let text = format_value(val);
+                other_widths[col] = other_widths[col].max(text.len() as u16);
+                let span = Span::from(text);
+                let span = self.style_span(span, TablePosition::TotalRow(col));
+                Line::from(span).right_aligned()
+            }),
+        );
+        let last_row = Row::new(last_row).bg(Color::Rgb(80, 80, 80));
+        rows.push(last_row);
+
+        let number_of_rows = rows.len() as u16;
+
+        if self.editor.is_editing() {
+            match self.pos {
+                TablePosition::Data { col, .. } | TablePosition::TotalRow(col) => {
+                    other_widths[col] = other_widths[col].max(self.editor.value().len() as u16 + 2)
+                }
+                TablePosition::RowName(_) => {
+                    first_width = first_width.max(self.editor.value().len() as u16 + 2)
+                }
+                TablePosition::Name | TablePosition::Button(_) => {}
+            }
+        }
 
         let widths = once(Constraint::Length(first_width))
             .chain(other_widths.iter().map(|&w| Constraint::Length(w)));
         let table = Table::new(rows, widths)
             .header(header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(self.data.name.clone()),
-            )
             .column_spacing(TABLE_COLUMN_SPACING);
-        let area = frame.size();
-        frame.render_widget(table, area);
+
+        let button_row: Vec<_> = BUTTON_LABELS
+            .iter()
+            .map(|s| Span::from(s.to_string()).fg(Color::White))
+            .enumerate()
+            .map(|(button_num, s)| self.style_span(s, TablePosition::Button(button_num)))
+            .flat_map(|s| {
+                once(s).chain(once(Span::from(" ".repeat(TABLE_COLUMN_SPACING as usize))))
+            })
+            .collect();
+        let button_row = Line::from(button_row);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(self.data.name.clone());
+        let area = block.inner(frame.size());
+        let rects = Layout::new(
+            Direction::Vertical,
+            [
+                Constraint::Length(1),
+                Constraint::Length(number_of_rows + 1),
+                Constraint::Length(2),
+            ],
+        )
+        .split(area);
+
+        frame.render_widget(name_line, rects[0]);
+        frame.render_widget(table, rects[1]);
+        frame.render_widget(button_row, rects[2]);
 
         let cursor_col = |col: usize| {
             first_width
@@ -517,17 +652,26 @@ impl TuiWidget for StatefulTable {
                     .take(col)
                     .sum::<u16>()
         };
+        let cursor_row = |row: usize| row as u16 + 2;
 
         let (cell_x, cell_y) = match self.pos {
             TablePosition::Name => (0, 0),
-            TablePosition::Header(col) => (cursor_col(col), 0),
-            TablePosition::RowName(row) => (0, row as u16 + 1),
-            TablePosition::Data { col, row } => (cursor_col(col), row as u16 + 1),
+            TablePosition::RowName(row) => (0, cursor_row(row)),
+            TablePosition::Data { col, row } => (cursor_col(col), cursor_row(row)),
+            TablePosition::TotalRow(col) => (cursor_col(col), cursor_row(self.data.rows())),
+            TablePosition::Button(button_num) => (
+                BUTTON_LABELS
+                    .iter()
+                    .take(button_num)
+                    .map(|s| s.len() as u16 + 1)
+                    .sum(),
+                cursor_row(self.data.rows() + 1),
+            ),
         };
         if self.editor.is_editing() {
             frame.set_cursor(
-                area.x + cell_x + self.editor.cursor_position() as u16 + 1,
-                area.y + cell_y + 1,
+                area.x + cell_x + self.editor.cursor_position() as u16,
+                area.y + cell_y,
             );
         }
     }

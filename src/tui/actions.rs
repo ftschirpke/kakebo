@@ -23,6 +23,8 @@ pub enum TuiAction {
     EditEnd,
     Select,
     Exit,
+    AddRow,
+    RemoveRow,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,6 +69,8 @@ pub fn widget_action() -> Option<TuiAction> {
             '$' => Some(TuiAction::ToEnd),
             'I' => Some(TuiAction::EditStart),
             'A' => Some(TuiAction::EditEnd),
+            '+' => Some(TuiAction::AddRow),
+            '-' => Some(TuiAction::RemoveRow),
             _ => None,
         },
         KeyCode::Up => Some(TuiAction::MoveUp),
@@ -81,7 +85,13 @@ pub fn widget_action() -> Option<TuiAction> {
 
 pub fn widget_editing_action() -> Option<EditingAction> {
     match key_pressed()? {
-        KeyCode::Char(c) => Some(EditingAction::InsertChar(c)),
+        KeyCode::Char(c) => {
+            if c.is_alphanumeric() || c.is_ascii_whitespace() || ".,-'!?".contains(c) {
+                Some(EditingAction::InsertChar(c))
+            } else {
+                None
+            }
+        }
         KeyCode::Left => Some(EditingAction::MoveLeft),
         KeyCode::Right => Some(EditingAction::MoveRight),
         KeyCode::Enter => Some(EditingAction::StopEditing),

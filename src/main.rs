@@ -1,17 +1,9 @@
-use std::io;
-
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
-use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
+use clap::{Parser, Subcommand};
+use serde::Deserialize;
 
 use self::errors::KakeboError;
-use self::tui::actions::TuiAction;
+use self::tui::open_widget;
 use self::tui::table::{StatefulTable, StatefulTableBuilder, TableData};
-use crate::tui::TuiWidget;
 
 pub mod errors;
 mod format;
@@ -29,37 +21,89 @@ fn create_table() -> Result<StatefulTable, KakeboError> {
             )
             .unwrap(),
         )
-        .required_data_fields(vec![(0, 0), (1, 1)])?
+        .editable_column(0)
         .build())
 }
 
+#[derive(Debug, Deserialize)]
+pub struct KakeboConfig {
+    pub currency: char,
+    pub decimal_sep: char,
+    pub user_name: String,
+}
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    Status,
+    Add {
+        #[command(subcommand)]
+        expense_type: ExpenseType,
+    },
+    Edit {
+        #[command(subcommand)]
+        expense_type: ExpenseType,
+    },
+    Receive {
+        #[arg(short, long)]
+        value: f64,
+        #[arg(short, long)]
+        from: String,
+    },
+    Test, // HACK: Remove this
+}
+
+#[derive(Subcommand, Debug)]
+enum ExpenseType {
+    Single,
+    Group,
+    Recurring,
+}
+
+// fn parse_config() -> Result<KakeboConfig, KakeboError> {
+//     let cur_dir = std::env::current_dir()?;
+//     let config_path = cur_dir.join("kakebo.config");
+
+//     if !config_path.exists() {
+//         println!("No config file found at {}", config_path.display());
+//         println!(
+//             "Please create a config file. A minimal config would look like this:
+//     \"user_name\" = \"Your name\"
+//     \"currency\" = \"$\"
+//     \"decimal_sep\" = \".\""
+//         );
+//         return Err(KakeboError::InvalidArgument("No config file found".into()));
+//     }
+
+//     println!("Config file found at {}", config_path.display());
+//     let config = std::fs::read_to_string(config_path)?;
+//     let config: KakeboConfig = toml::from_str(&config)?;
+//     Ok(config)
+// }
+
 fn main() -> Result<(), KakeboError> {
-    // setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let args = Args::parse();
 
-    // create app and run it
-    let mut stateful_table = create_table()?;
-
-    loop {
-        terminal.draw(|f| stateful_table.render(f))?;
-        let action = stateful_table.handle_events();
-        if let Some(TuiAction::Exit) = action {
-            break;
-        }
+    match args.command {
+        Command::Status => println!("Status"),
+        Command::Add { expense_type } => match expense_type {
+            ExpenseType::Single => println!("Add single"),
+            ExpenseType::Group => println!("Add group"),
+            ExpenseType::Recurring => println!("Add recurring"),
+        },
+        Command::Edit { expense_type } => match expense_type {
+            ExpenseType::Single => println!("Edit single"),
+            ExpenseType::Group => println!("Edit group"),
+            ExpenseType::Recurring => println!("Edit recurring"),
+        },
+        Command::Receive { value, from } => println!("Receive {} from {}", value, from),
+        Command::Test => open_widget(create_table()?)?,
     }
-
-    // restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
     Ok(())
 }
