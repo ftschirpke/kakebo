@@ -1,5 +1,10 @@
+use age::{secrecy::Secret, Decryptor, Encryptor};
 use clap::{Parser, Subcommand};
+use rpassword::read_password;
 use serde::Deserialize;
+
+use std::fs::File;
+use std::io::{stdout, BufReader, Read, Write};
 
 use self::errors::KakeboError;
 use self::tui::open_widget;
@@ -56,7 +61,8 @@ enum Command {
         #[arg(short, long)]
         from: String,
     },
-    Test, // HACK: Remove this
+    Test,  // HACK: Remove this
+    Crypt, // HACK: Remove this
 }
 
 #[derive(Subcommand, Debug)]
@@ -87,6 +93,49 @@ enum ExpenseType {
 //     Ok(config)
 // }
 
+fn crypt_test() -> Result<(), KakeboError> {
+    print!("Enter a passphrase: ");
+    stdout().flush()?;
+    let passphrase = read_password()?;
+
+    let file = File::open("test.txt")?;
+    let mut file_reader = BufReader::new(file);
+
+    // ... and decrypt the ciphertext to the plaintext again using the same passphrase.
+    let decrypted = {
+        let decryptor = match Decryptor::new(&mut file_reader)? {
+            age::Decryptor::Passphrase(d) => d,
+            _ => unreachable!(),
+        };
+
+        let mut decrypted = String::new();
+
+        let mut reader = decryptor.decrypt(&Secret::new(passphrase.to_owned()), None)?;
+        reader.read_to_string(&mut decrypted)?;
+
+        decrypted
+    };
+
+    println!("Decrypted version of the file:\n{}", decrypted);
+
+    // let encrypted = {
+    //     let encryptor = Encryptor::with_user_passphrase(Secret::new(passphrase.to_owned()));
+
+    //     let mut encrypted = vec![];
+    //     let mut writer = encryptor.wrap_output(&mut encrypted)?;
+    //     writer.write_all(plaintext)?;
+    //     writer.finish()?;
+
+    //     encrypted
+    // };
+
+    // file.write_all(encrypted.as_slice())?;
+
+    // assert_eq!(decrypted, plaintext);
+
+    Ok(())
+}
+
 fn main() -> Result<(), KakeboError> {
     let args = Args::parse();
 
@@ -104,6 +153,7 @@ fn main() -> Result<(), KakeboError> {
         },
         Command::Receive { value, from } => println!("Receive {} from {}", value, from),
         Command::Test => open_widget(create_table()?)?,
+        Command::Crypt => crypt_test()?,
     }
     Ok(())
 }
