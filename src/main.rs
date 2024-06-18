@@ -1,9 +1,11 @@
 use clap::{Parser, Subcommand};
+use expense_editor::{ExpenseEditor, SingleExpense};
 use serde::Deserialize;
 
 use self::errors::KakeboError;
 
 pub mod errors;
+mod expense_editor;
 mod format;
 mod parse;
 
@@ -74,11 +76,10 @@ fn main() -> Result<(), KakeboError> {
 
     match args.command {
         Command::Status => println!("Status"),
-        Command::Add { expense_type } => match expense_type {
-            ExpenseType::Single => println!("Add single"),
-            ExpenseType::Group => println!("Add group"),
-            ExpenseType::Recurring => println!("Add recurring"),
-        },
+        Command::Add { expense_type } => {
+            let mut editor = ExpenseEditor::<SingleExpense>::new(expense_type, config);
+            println!("{:?}", editor.create_record()?);
+        }
         Command::Edit { expense_type } => match expense_type {
             ExpenseType::Single => println!("Edit single"),
             ExpenseType::Group => println!("Edit group"),
