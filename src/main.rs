@@ -1,13 +1,17 @@
 use clap::{Parser, Subcommand};
-use expense_editor::{ExpenseEditor, SingleExpense};
+use expense_editor::ExpenseEditor;
+use expenses::{
+    group_expense::GroupExpense, recurring_expense::RecurringExpense, single_expense::SingleExpense,
+};
+use rust_decimal::Decimal;
 use serde::Deserialize;
 
 use self::errors::KakeboError;
 
 pub mod errors;
 mod expense_editor;
+mod expenses;
 mod format;
-mod parse;
 
 #[derive(Debug, Deserialize)]
 pub struct KakeboConfig {
@@ -77,8 +81,34 @@ fn main() -> Result<(), KakeboError> {
     match args.command {
         Command::Status => println!("Status"),
         Command::Add { expense_type } => {
-            let mut editor = ExpenseEditor::<SingleExpense>::new(expense_type, config);
-            println!("{:?}", editor.create_record()?);
+            match expense_type {
+                ExpenseType::Single => {
+                    let mut editor = ExpenseEditor::<SingleExpense>::new(config);
+                    let record = editor.create_record()?;
+                    println!("{:?}", record);
+                }
+                ExpenseType::Group => {
+                    let mut editor = ExpenseEditor::<GroupExpense>::new(config);
+                    let record = editor.create_record()?;
+                    println!("{:?}", record);
+                    println!("{:?}", record.raw_total());
+                    println!("{:?}", record.raw_total().scale());
+                    println!("{:?}", record.total_amounts());
+                    println!(
+                        "{:?}",
+                        record
+                            .total_amounts()
+                            .into_iter()
+                            .map(|dec| dec.scale())
+                            .collect::<Vec<_>>()
+                    );
+                }
+                ExpenseType::Recurring => {
+                    let mut editor = ExpenseEditor::<RecurringExpense>::new(config);
+                    let record = editor.create_record()?;
+                    println!("{:?}", record);
+                }
+            };
         }
         Command::Edit { expense_type } => match expense_type {
             ExpenseType::Single => println!("Edit single"),
