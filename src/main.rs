@@ -1,15 +1,12 @@
 use clap::{Parser, Subcommand};
-use expense_editor::ExpenseEditor;
-use expenses::{
-    group_expense::GroupExpense, recurring_expense::RecurringExpense, single_expense::SingleExpense,
-};
+use expenses::{single_expense::SingleExpense, ExpenseKind};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
 use self::errors::KakeboError;
 
 pub mod errors;
-mod expense_editor;
+// mod expense_editor;
 mod expenses;
 mod format;
 
@@ -78,44 +75,49 @@ fn main() -> Result<(), KakeboError> {
     let args = Args::parse();
     let config = parse_config()?;
 
-    match args.command {
-        Command::Status => println!("Status"),
-        Command::Add { expense_type } => {
-            match expense_type {
-                ExpenseType::Single => {
-                    let mut editor = ExpenseEditor::<SingleExpense>::new(config);
-                    let record = editor.create_record()?;
-                    println!("{:?}", record);
-                }
-                ExpenseType::Group => {
-                    let mut editor = ExpenseEditor::<GroupExpense>::new(config);
-                    let record = editor.create_record()?;
-                    println!("{:?}", record);
-                    println!("{:?}", record.raw_total());
-                    println!("{:?}", record.raw_total().scale());
-                    println!("{:?}", record.total_amounts());
-                    println!(
-                        "{:?}",
-                        record
-                            .total_amounts()
-                            .into_iter()
-                            .map(|dec| dec.scale())
-                            .collect::<Vec<_>>()
-                    );
-                }
-                ExpenseType::Recurring => {
-                    let mut editor = ExpenseEditor::<RecurringExpense>::new(config);
-                    let record = editor.create_record()?;
-                    println!("{:?}", record);
-                }
-            };
-        }
-        Command::Edit { expense_type } => match expense_type {
-            ExpenseType::Single => println!("Edit single"),
-            ExpenseType::Group => println!("Edit group"),
-            ExpenseType::Recurring => println!("Edit recurring"),
-        },
-        Command::Receive { value, from } => println!("Receive {} from {}", value, from),
-    }
+    // let kind = ExpenseKind::new()?;
+    // println!("{:?}", kind);
+    let single = SingleExpense::new(&config)?;
+
+    // match args.command {
+    //     Command::Status => println!("Status"),
+    //     Command::Add { expense_type } => {
+    //         match expense_type {
+    //             ExpenseType::Single => {
+    //                 let mut editor = ExpenseEditor::<SingleExpense>::new(config);
+    //                 let record = editor.create_record()?;
+    //                 println!("{:?}", record);
+    //             }
+    //             ExpenseType::Group => {
+    //                 let mut editor = ExpenseEditor::<GroupExpense>::new(config);
+    //                 let record = editor.create_record()?;
+    //                 println!("{:?}", record);
+    //                 println!("{:?}", record.raw_total());
+    //                 println!("{:?}", record.raw_total().scale());
+    //                 println!("{:?}", record.total_amounts());
+    //                 println!(
+    //                     "{:?}",
+    //                     record
+    //                         .total_amounts()
+    //                         .into_iter()
+    //                         .map(|dec| dec.scale())
+    //                         .collect::<Vec<_>>()
+    //                 );
+    //             }
+    //             ExpenseType::Recurring => {
+    //                 let mut editor = ExpenseEditor::<RecurringExpense>::new(config);
+    //                 let record = editor.create_record()?;
+    //                 println!("{:?}", record);
+    //             }
+    //         };
+    //     }
+    //     Command::Edit { expense_type } => match expense_type {
+    //         ExpenseType::Single => println!("Edit single"),
+    //         ExpenseType::Group => println!("Edit group"),
+    //         ExpenseType::Recurring => println!("Edit recurring"),
+    //     },
+    //     Command::Receive { value, from } => println!("Receive {} from {}", value, from),
+    // }
+
     Ok(())
 }

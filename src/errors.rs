@@ -14,4 +14,6 @@ pub enum KakeboError {
     Encryption(#[from] age::EncryptError),
     #[error("Deserialization error: {0}")]
     Deserialization(#[from] toml::de::Error),
+    #[error("Inquire error: {0}")]
+    Inquire(#[from] inquire::error::InquireError),
 }
