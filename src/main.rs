@@ -1,14 +1,21 @@
+use std::{
+    fs::File,
+    io::{stdout, BufReader, BufWriter, Write},
+    path::Path,
+};
+
+use age::{secrecy::Secret, Decryptor, Encryptor};
 use clap::{Parser, Subcommand};
-use expenses::{single_expense::SingleExpense, ExpenseKind};
-use rust_decimal::Decimal;
-use serde::Deserialize;
+use expenses::{group_expense::GroupExpense, single_expense::SingleExpense};
+use lz4_flex::frame::{FrameDecoder, FrameEncoder};
+use rpassword::read_password;
+use serde::{Deserialize, Serialize};
 
 use self::errors::KakeboError;
 
 pub mod errors;
 // mod expense_editor;
 mod expenses;
-mod format;
 
 #[derive(Debug, Deserialize)]
 pub struct KakeboConfig {
@@ -43,6 +50,8 @@ fn parse_config() -> Result<KakeboConfig, KakeboError> {
 struct Args {
     #[command(subcommand)]
     command: Command,
+    #[arg(short, long)]
+    debug: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -71,53 +80,101 @@ enum ExpenseType {
     Recurring,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Expenses {
+    single_expenses: Vec<SingleExpense>,
+    group_expenses: Vec<GroupExpense>,
+}
+
+impl Expenses {
+    pub fn new() -> Self {
+        Self {
+            single_expenses: Vec::new(),
+            group_expenses: Vec::new(),
+        }
+    }
+}
+
+const KAKEBO_DB_FILE: &str = "test.kakebo";
+
 fn main() -> Result<(), KakeboError> {
     let args = Args::parse();
     let config = parse_config()?;
 
-    // let kind = ExpenseKind::new()?;
-    // println!("{:?}", kind);
-    let single = SingleExpense::new(&config)?;
+    let path = Path::new(KAKEBO_DB_FILE);
 
-    // match args.command {
-    //     Command::Status => println!("Status"),
-    //     Command::Add { expense_type } => {
-    //         match expense_type {
-    //             ExpenseType::Single => {
-    //                 let mut editor = ExpenseEditor::<SingleExpense>::new(config);
-    //                 let record = editor.create_record()?;
-    //                 println!("{:?}", record);
-    //             }
-    //             ExpenseType::Group => {
-    //                 let mut editor = ExpenseEditor::<GroupExpense>::new(config);
-    //                 let record = editor.create_record()?;
-    //                 println!("{:?}", record);
-    //                 println!("{:?}", record.raw_total());
-    //                 println!("{:?}", record.raw_total().scale());
-    //                 println!("{:?}", record.total_amounts());
-    //                 println!(
-    //                     "{:?}",
-    //                     record
-    //                         .total_amounts()
-    //                         .into_iter()
-    //                         .map(|dec| dec.scale())
-    //                         .collect::<Vec<_>>()
-    //                 );
-    //             }
-    //             ExpenseType::Recurring => {
-    //                 let mut editor = ExpenseEditor::<RecurringExpense>::new(config);
-    //                 let record = editor.create_record()?;
-    //                 println!("{:?}", record);
-    //             }
-    //         };
-    //     }
-    //     Command::Edit { expense_type } => match expense_type {
-    //         ExpenseType::Single => println!("Edit single"),
-    //         ExpenseType::Group => println!("Edit group"),
-    //         ExpenseType::Recurring => println!("Edit recurring"),
-    //     },
-    //     Command::Receive { value, from } => println!("Receive {} from {}", value, from),
-    // }
+    let mut expenses = if path.exists() {
+        let file = File::open(path)?;
+        let mut file_reader = BufReader::new(file);
+        // TODO: find and fix the bug in the following code to make encryption and decompression work
+        // print!("Enter decryption password: ");
+        // stdout().flush()?;
+        // let passphrase = read_password()?;
+        // let decryptor = match Decryptor::new(&mut file_reader)? {
+        //     Decryptor::Passphrase(decr) => decr,
+        //     _ => unreachable!(),
+        // };
+        // let mut decrypt_reader = decryptor.decrypt(&Secret::new(passphrase.to_owned()), None)?;
+        // let mut decode_reader = FrameDecoder::new(decrypt_reader);
+        rmp_serde::decode::from_read(&mut file_reader)?
+    } else {
+        println!("Starting with an empty database");
+        Expenses::new()
+    };
+
+    if args.debug {
+        println!(
+            "=== Expenses Before ===\n{:?}\n=======================",
+            expenses
+        );
+    }
+
+    match args.command {
+        Command::Status => println!("Status"),
+        Command::Add { expense_type } => {
+            match expense_type {
+                ExpenseType::Single => {
+                    let single = SingleExpense::new(&config)?;
+                    println!("{:?}", single);
+                    expenses.single_expenses.push(single);
+                }
+                ExpenseType::Group => {
+                    let group = GroupExpense::new(&config)?;
+                    println!("{:?}", group);
+                    println!("Raw Total {:?}", group.raw_total());
+                    println!("Raw Total (scaled) {:?}", group.raw_total().scale());
+                    println!("True user amount {:?}", group.true_user_amount());
+                    println!("True amounts {:?}", group.true_amounts());
+                    expenses.group_expenses.push(group);
+                }
+                ExpenseType::Recurring => println!("Add group"),
+            };
+        }
+        Command::Edit { expense_type } => match expense_type {
+            ExpenseType::Single => println!("Edit single"),
+            ExpenseType::Group => println!("Edit group"),
+            ExpenseType::Recurring => println!("Edit recurring"),
+        },
+        Command::Receive { value, from } => println!("Receive {} from {}", value, from),
+    }
+
+    if args.debug {
+        println!(
+            "=== Expenses After ===\n{:?}\n======================",
+            expenses
+        );
+    }
+
+    let file = File::create(KAKEBO_DB_FILE)?;
+    let mut file_writer = BufWriter::new(file);
+    // TODO: find and fix the bug in the following code to make encryption and decompression work
+    // print!("Enter encryption password: ");
+    // stdout().flush()?;
+    // let passphrase = read_password()?;
+    // let encryptor = Encryptor::with_user_passphrase(Secret::new(passphrase.to_owned()));
+    // let mut encrypt_writer = encryptor.wrap_output(&mut file_writer)?;
+    // let mut compress_writer = FrameEncoder::new(encrypt_writer);
+    rmp_serde::encode::write_named(&mut file_writer, &expenses)?;
 
     Ok(())
 }

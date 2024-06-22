@@ -1,10 +1,10 @@
 use chrono::NaiveDate;
 use inquire::{
     error::{CustomUserError, InquireResult},
-    required, Confirm, CustomType, DateSelect, MultiSelect, Select, Text,
+    required, Confirm, CustomType, DateSelect, InquireError, MultiSelect, Select, Text,
 };
 use rust_decimal::Decimal;
-use serde::{de::DeserializeOwned, Deserialize, Deserializer};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 
 use crate::{errors::KakeboError, KakeboConfig};
 
@@ -12,8 +12,8 @@ pub mod group_expense;
 // pub mod recurring_expense;
 pub mod single_expense;
 
-pub fn money_amount(config: &KakeboConfig) -> InquireResult<Decimal> {
-    CustomType::new("Amount:")
+pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal> {
+    CustomType::new(&format!("Amount {name}:"))
         .with_formatter(&|decimal: Decimal| format!("{}{:.2}", config.currency, decimal))
         .with_error_message("Please type a valid number")
         .with_help_message(&format!(
@@ -23,16 +23,14 @@ pub fn money_amount(config: &KakeboConfig) -> InquireResult<Decimal> {
         .prompt()
 }
 
-pub fn confirm() -> InquireResult<bool> {
-    let ans = Confirm::new("Question?")
-        .with_default(false)
-        .with_help_message("This data is stored for good reasons")
-        .prompt()?;
-    println!("Your answer: {ans}");
-    Ok(ans)
+#[derive(Debug)]
+pub enum ConfirmAction {
+    Confirm,
+    EditDescription,
+    Abort,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ExpenseKind {
     category: ExpenseCategory,
     description: Option<String>,
@@ -42,10 +40,14 @@ pub struct ExpenseKind {
 impl ExpenseKind {
     pub fn new() -> Result<Self, KakeboError> {
         let date = DateSelect::new("Date:").prompt()?;
-        let category_text = Text::new("Category:")
-            .with_validator(required!("Date is required!"))
-            .with_autocomplete(&ExpenseCategory::suggestor)
-            .prompt()?;
+        let category_text = Select::new("Category:", ExpenseCategory::options()).prompt()?;
+        let category_text = if category_text == "Other" {
+            Text::new("Other category:")
+                .with_validator(required!("Require non-empty category"))
+                .prompt()?
+        } else {
+            category_text.to_string()
+        };
         let category = ExpenseCategory::from(category_text);
         let description = Text::new("Description:").prompt()?;
         let description = (!description.is_empty()).then_some(description);
@@ -57,7 +59,7 @@ impl ExpenseKind {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum ExpenseCategory {
     ReplacementOrRepair,
     Groceries,
@@ -91,15 +93,8 @@ impl ExpenseCategory {
             "Hobby",
             "Restaurant",
             "Entertainment",
+            "Other",
         ]
-    }
-    fn suggestor(input: &str) -> Result<Vec<String>, CustomUserError> {
-        let input = input.to_lowercase();
-        let suggestions = Self::options()
-            .into_iter()
-            .filter(|option| option.to_lowercase().contains(&input))
-            .map(str::to_string);
-        Ok(suggestions.collect())
     }
 }
 

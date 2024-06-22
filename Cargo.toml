@@ -5,10 +5,12 @@ edition = "2021"
 
 [dependencies]
 age = { version = "0.10.0" }
-chrono = "0.4.38"
+chrono = { version = "0.4.38", features = ["serde"] }
 clap = { version = "4.5.0", features = ["derive"] }
 edit = "0.1.5"
 inquire = { version = "0.7.5", features = ["date"] }
+lz4_flex = "0.11.3"
+rmp-serde = "1.3.0"
 rpassword = "7.3.1"
 rust_decimal = "1.35.0"
 serde = { version = "1.0.203", features = ["derive"] }
