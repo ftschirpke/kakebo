@@ -7,20 +7,20 @@ use crate::errors::KakeboError;
 use crate::KakeboConfig;
 
 use super::money_amount;
-use super::ExpenseKind;
+use super::ExpenseInfo;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SingleExpense {
     amount: Decimal,
-    kind: ExpenseKind,
+    info: ExpenseInfo,
 }
 
 impl SingleExpense {
     pub fn new(config: &KakeboConfig) -> Result<Self, KakeboError> {
-        let kind = ExpenseKind::new()?;
+        let info = ExpenseInfo::new()?;
         let amount = money_amount(config, &config.user_name)?;
         if Confirm::new("Save this expense?").prompt()? {
-            Ok(Self { kind, amount })
+            Ok(Self { info, amount })
         } else {
             Err(KakeboError::ExpenseCreationAborted)
         }

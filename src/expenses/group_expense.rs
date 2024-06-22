@@ -6,20 +6,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::{errors::KakeboError, KakeboConfig};
 
-use super::{money_amount, ExpenseKind};
+use super::{money_amount, ExpenseInfo};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// a group expense that distributes extra costs such as tips or delivery fees fairly
 pub struct GroupExpense {
-    kind: ExpenseKind,
+    info: ExpenseInfo,
     raw_user_amount: Decimal,
     people: Vec<String>,
     raw_amounts: Vec<Decimal>,
     total_amount: Decimal,
     paid_amounts: Vec<Option<Decimal>>,
 }
-
-const SUGGESTION_COUNT: usize = 10;
 
 impl GroupExpense {
     pub fn raw_total(&self) -> Decimal {
@@ -42,15 +40,13 @@ impl GroupExpense {
     }
 
     pub fn new(config: &KakeboConfig) -> Result<Self, KakeboError> {
-        let kind = ExpenseKind::new()?;
+        let info = ExpenseInfo::new()?;
         let raw_user_amount = money_amount(config, &format!("{} (raw)", config.user_name))?;
         let mut people = Vec::new();
         let mut raw_amounts = Vec::new();
 
         loop {
-            let person_name = Text::new("Add person:")
-                // .with_autocomplete(&name_suggestor) // TODO: suggest most commonly used names
-                // .with_page_size(SUGGESTION_COUNT)
+            let person_name = Text::new("Add person:") // TODO: suggest most commonly used names
                 .prompt()?;
             if person_name.is_empty() {
                 break;
@@ -85,7 +81,7 @@ impl GroupExpense {
 
         if Confirm::new("Save this expense?").prompt()? {
             Ok(Self {
-                kind,
+                info,
                 raw_user_amount,
                 people,
                 raw_amounts,

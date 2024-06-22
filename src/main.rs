@@ -80,7 +80,7 @@ enum ExpenseType {
     Recurring,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Expenses {
     single_expenses: Vec<SingleExpense>,
     group_expenses: Vec<GroupExpense>,
@@ -96,6 +96,7 @@ impl Expenses {
 }
 
 const KAKEBO_DB_FILE: &str = "test.kakebo";
+const DEBUG_DB_FILE: &str = "debug.kakebo";
 
 fn main() -> Result<(), KakeboError> {
     let args = Args::parse();
@@ -129,6 +130,34 @@ fn main() -> Result<(), KakeboError> {
         );
     }
 
+    let path = Path::new(DEBUG_DB_FILE);
+
+    let mut debug_expenses = if path.exists() {
+        let file = File::open(path)?;
+        let mut file_reader = BufReader::new(file);
+        // TODO: find and fix the bug in the following code to make encryption and decompression work
+        // print!("Enter decryption password: ");
+        // stdout().flush()?;
+        // let passphrase = read_password()?;
+        // let decryptor = match Decryptor::new(&mut file_reader)? {
+        //     Decryptor::Passphrase(decr) => decr,
+        //     _ => unreachable!(),
+        // };
+        // let mut decrypt_reader = decryptor.decrypt(&Secret::new(passphrase.to_owned()), None)?;
+        let mut decode_reader = FrameDecoder::new(file_reader);
+        rmp_serde::decode::from_read(&mut decode_reader)?
+    } else {
+        println!("Starting with an empty database");
+        Expenses::new()
+    };
+
+    if args.debug {
+        println!(
+            "=== Debug Expenses Before ===\n{:?}\n=======================",
+            debug_expenses
+        );
+    }
+
     match args.command {
         Command::Status => println!("Status"),
         Command::Add { expense_type } => {
@@ -142,7 +171,6 @@ fn main() -> Result<(), KakeboError> {
                     let group = GroupExpense::new(&config)?;
                     println!("{:?}", group);
                     println!("Raw Total {:?}", group.raw_total());
-                    println!("Raw Total (scaled) {:?}", group.raw_total().scale());
                     println!("True user amount {:?}", group.true_user_amount());
                     println!("True amounts {:?}", group.true_amounts());
                     expenses.group_expenses.push(group);
@@ -165,7 +193,7 @@ fn main() -> Result<(), KakeboError> {
         );
     }
 
-    let file = File::create(KAKEBO_DB_FILE)?;
+    let file = File::create(DEBUG_DB_FILE)?;
     let mut file_writer = BufWriter::new(file);
     // TODO: find and fix the bug in the following code to make encryption and decompression work
     // print!("Enter encryption password: ");
@@ -173,8 +201,8 @@ fn main() -> Result<(), KakeboError> {
     // let passphrase = read_password()?;
     // let encryptor = Encryptor::with_user_passphrase(Secret::new(passphrase.to_owned()));
     // let mut encrypt_writer = encryptor.wrap_output(&mut file_writer)?;
-    // let mut compress_writer = FrameEncoder::new(encrypt_writer);
-    rmp_serde::encode::write_named(&mut file_writer, &expenses)?;
+    let mut compress_writer = FrameEncoder::new(file_writer);
+    rmp_serde::encode::write_named(&mut compress_writer, &expenses)?;
 
     Ok(())
 }

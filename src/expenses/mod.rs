@@ -1,10 +1,7 @@
-use chrono::NaiveDate;
-use inquire::{
-    error::{CustomUserError, InquireResult},
-    required, Confirm, CustomType, DateSelect, InquireError, MultiSelect, Select, Text,
-};
+use chrono::{Local, NaiveDate};
+use inquire::{error::InquireResult, required, CustomType, DateSelect, Select, Text};
 use rust_decimal::Decimal;
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{errors::KakeboError, KakeboConfig};
 
@@ -14,7 +11,7 @@ pub mod single_expense;
 
 pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal> {
     CustomType::new(&format!("Amount {name}:"))
-        .with_formatter(&|decimal: Decimal| format!("{}{:.2}", config.currency, decimal))
+        .with_formatter(&|decimal: Decimal| format!("{:.2}{}", decimal, config.currency))
         .with_error_message("Please type a valid number")
         .with_help_message(&format!(
             "Type the amount in {} using a decimal point as a separator",
@@ -23,22 +20,17 @@ pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal>
         .prompt()
 }
 
-#[derive(Debug)]
-pub enum ConfirmAction {
-    Confirm,
-    EditDescription,
-    Abort,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExpenseKind {
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExpenseInfo {
     category: ExpenseCategory,
     description: Option<String>,
     date: NaiveDate,
+    creation_date: NaiveDate,
 }
 
-impl ExpenseKind {
+impl ExpenseInfo {
     pub fn new() -> Result<Self, KakeboError> {
+        let creation_date = Local::now().date_naive();
         let date = DateSelect::new("Date:").prompt()?;
         let category_text = Select::new("Category:", ExpenseCategory::options()).prompt()?;
         let category_text = if category_text == "Other" {
@@ -52,6 +44,7 @@ impl ExpenseKind {
         let description = Text::new("Description:").prompt()?;
         let description = (!description.is_empty()).then_some(description);
         Ok(Self {
+            creation_date,
             date,
             description,
             category,
@@ -59,7 +52,7 @@ impl ExpenseKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 enum ExpenseCategory {
     ReplacementOrRepair,
     Groceries,
@@ -96,8 +89,4 @@ impl ExpenseCategory {
             "Other",
         ]
     }
-}
-
-pub trait Expense: Sized {
-    fn record_template(records: &[Self], config: &KakeboConfig) -> String;
 }
