@@ -24,7 +24,6 @@ use self::errors::KakeboError;
 mod errors;
 mod expenses;
 
-const BACKUP_DB_FILE: &str = "backup.kakebo";
 const KAKEBO_DB_FILE: &str = "test.kakebo";
 
 #[derive(Debug, Deserialize)]
@@ -71,9 +70,6 @@ enum Command {
     Status {
         #[command(subcommand)]
         expense_type: Option<ExpenseType>,
-    },
-    Restore {
-        file: PathBuf,
     },
     Add {
         #[command(subcommand)]
@@ -308,12 +304,6 @@ fn run() -> Result<(), KakeboError> {
 
     let path = config.database_dir.join(KAKEBO_DB_FILE);
 
-    if let Command::Restore { file } = &args.command {
-        let expenses: Expenses = ron::de::from_str(&std::fs::read_to_string(file)?)?;
-        let path = Path::new(KAKEBO_DB_FILE);
-        return write_file(path, &expenses);
-    }
-
     let mut expenses: Expenses = parse_file(&path)?;
     let mut environment = Environment {
         config,
@@ -335,7 +325,6 @@ fn run() -> Result<(), KakeboError> {
     }
 
     let changes_made = match args.command {
-        Command::Restore { .. } => unreachable!("Restoration should have already happened."),
         Command::Status { expense_type } => {
             match expense_type {
                 None => {
@@ -499,10 +488,6 @@ fn run() -> Result<(), KakeboError> {
             expenses
         );
     }
-
-    // HACK: this is just for development purposes, in case of broken output
-    let backup = Path::new(BACKUP_DB_FILE);
-    std::fs::write(backup, ron::ser::to_string(&expenses)?)?;
 
     let path = Path::new(KAKEBO_DB_FILE);
     write_file(path, &expenses)

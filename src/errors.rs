@@ -16,10 +16,6 @@ pub enum KakeboError {
     RmpDecode(#[from] rmp_serde::decode::Error),
     #[error("RMP encode error: {0}")]
     RmpEncode(#[from] rmp_serde::encode::Error),
-    #[error("RON Deserialization error: {0}")]
-    RonDeserialization(#[from] ron::de::SpannedError),
-    #[error("RON Serialization error: {0}")]
-    RonSerialization(#[from] ron::Error),
     #[error("Toml Serialization error: {0}")]
     TomlSerialization(#[from] toml::ser::Error),
     #[error("Toml Deserialization error: {0}")]
