@@ -2,15 +2,15 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum KakeboError {
-    #[error("Invalid value: {0}")]
-    Parse(String),
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Decryption error: {0}")]
+    #[error("(De)Compression error: {0}")]
+    Compression(#[from] lz4_flex::frame::Error),
+    #[error("LZ4 Decryption error: {0}")]
     Decryption(#[from] age::DecryptError),
-    #[error("Encryption error: {0}")]
+    #[error("LZ4 Encryption error: {0}")]
     Encryption(#[from] age::EncryptError),
     #[error("RMP decode error: {0}")]
     RmpDecode(#[from] rmp_serde::decode::Error),

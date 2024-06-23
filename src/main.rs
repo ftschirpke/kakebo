@@ -1,27 +1,37 @@
 use std::{
+    cmp::Ordering,
+    collections::{BTreeSet, HashMap},
     fs::File,
-    io::{stdout, BufReader, BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
+    process::ExitCode,
 };
 
 use age::{secrecy::Secret, Decryptor, Encryptor};
+use chrono::Local;
+use chronoutil::RelativeDuration;
 use clap::{Parser, Subcommand};
-use expenses::{group_expense::GroupExpense, single_expense::SingleExpense};
+use expenses::{
+    advancement::Advancement, debt::Debt, group_expense::GroupExpense,
+    recurring_expense::RecurringExpense, single_expense::SingleExpense,
+};
+use inquire::{Confirm, Password, Select};
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
-use rpassword::read_password;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use self::errors::KakeboError;
 
-pub mod errors;
-// mod expense_editor;
+mod errors;
 mod expenses;
+
+const KAKEBO_DB_FILE: &str = "test.kakebo";
 
 #[derive(Debug, Deserialize)]
 pub struct KakeboConfig {
     pub currency: char,
     pub decimal_sep: char,
     pub user_name: String,
+    pub database_dir: PathBuf,
 }
 
 fn parse_config() -> Result<KakeboConfig, KakeboError> {
@@ -32,9 +42,10 @@ fn parse_config() -> Result<KakeboConfig, KakeboError> {
         println!("No config file found at {}", config_path.display());
         println!(
             "Please create a config file. A minimal config would look like this:
-\"user_name\" = \"Your name\"
-\"currency\" = \"$\"
-\"decimal_sep\" = \".\""
+user_name = \"Your name\"
+currency = \"$\"
+decimal_sep = \".\"
+database_dir = \"/home/<username>/<path>/<to>/<dir>\""
         );
         return Err(KakeboError::InvalidArgument("No config file found".into()));
     }
@@ -56,7 +67,10 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    Status,
+    Status {
+        #[command(subcommand)]
+        expense_type: Option<ExpenseType>,
+    },
     Add {
         #[command(subcommand)]
         expense_type: ExpenseType,
@@ -66,10 +80,8 @@ enum Command {
         expense_type: ExpenseType,
     },
     Receive {
-        #[arg(short, long)]
-        value: f64,
-        #[arg(short, long)]
-        from: String,
+        value: Decimal,
+        from: Option<String>,
     },
 }
 
@@ -78,12 +90,23 @@ enum ExpenseType {
     Single,
     Group,
     Recurring,
+    Todo,
+    Advance,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Debug)]
+enum IncomeType {
+    Single,
+    Recurring,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Expenses {
     single_expenses: Vec<SingleExpense>,
     group_expenses: Vec<GroupExpense>,
+    recurring_expenses: Vec<RecurringExpense>,
+    debts_owed: Vec<Debt>,
+    unpaid_advancements: Vec<Advancement>,
 }
 
 impl Expenses {
@@ -91,35 +114,207 @@ impl Expenses {
         Self {
             single_expenses: Vec::new(),
             group_expenses: Vec::new(),
+            recurring_expenses: Vec::new(),
+            debts_owed: Vec::new(),
+            unpaid_advancements: Vec::new(),
+        }
+    }
+
+    pub fn print_status(&self) {
+        println!("Expenses Overview:");
+        let today = Local::now().date_naive();
+        let month_ago = today - RelativeDuration::months(1);
+
+        let single_expenses_last_month: Decimal = self
+            .single_expenses
+            .iter()
+            .filter(|expense| expense.info.date > month_ago && expense.info.date <= today)
+            .map(|expense| expense.amount)
+            .sum();
+        let group_expenses_last_month: Decimal = self
+            .group_expenses
+            .iter()
+            .filter(|expense| expense.info.date > month_ago && expense.info.date <= today)
+            .map(GroupExpense::true_user_amount)
+            .sum::<Decimal>();
+        let recurring_expenses_last_month: Decimal = self
+            .recurring_expenses
+            .iter()
+            .map(|expense| expense.amount_in_interval(month_ago, today))
+            .sum::<Decimal>();
+        println!(
+            "  Single Expenses last month:    {:8.2}",
+            single_expenses_last_month
+        );
+        println!(
+            "  Group Expenses last month:     {:8.2}",
+            group_expenses_last_month
+        );
+        println!(
+            "  Recurring Expenses last month: {:8.2}",
+            recurring_expenses_last_month
+        );
+        println!(
+            "  Total Expenses last month:     {:8.2}",
+            single_expenses_last_month + group_expenses_last_month + recurring_expenses_last_month
+        );
+
+        println!("Balances:");
+        let mut people_owe_user: HashMap<&str, Decimal> = HashMap::new();
+        let mut user_owes_people: HashMap<&str, Decimal> = HashMap::new();
+
+        let debts_from_group_expenses = self.group_expenses.iter().flat_map(|group_expense| {
+            group_expense.people.iter().zip(
+                group_expense
+                    .true_amounts()
+                    .into_iter()
+                    .zip(group_expense.paid_amounts.iter()),
+            )
+        });
+        for (person, (amount, already_paid)) in debts_from_group_expenses {
+            let paid = already_paid.unwrap_or(Decimal::ZERO);
+            match paid.cmp(&amount) {
+                Ordering::Less => {
+                    let owed: Decimal = amount - paid;
+                    people_owe_user
+                        .entry(person)
+                        .and_modify(|val| *val += owed)
+                        .or_insert(owed);
+                }
+                Ordering::Greater => {
+                    let overpaid: Decimal = paid - amount;
+                    user_owes_people
+                        .entry(person)
+                        .and_modify(|val| *val += overpaid)
+                        .or_insert(overpaid);
+                }
+                Ordering::Equal => {}
+            }
+        }
+        for debt in &self.debts_owed {
+            user_owes_people
+                .entry(&debt.person)
+                .and_modify(|val| *val += debt.expense.amount)
+                .or_insert(debt.expense.amount);
+        }
+        for advancement in &self.unpaid_advancements {
+            people_owe_user
+                .entry(&advancement.person)
+                .and_modify(|val| *val += advancement.amount)
+                .or_insert(advancement.amount);
+        }
+
+        let all_people: BTreeSet<_> = self
+            .group_expenses
+            .iter()
+            .flat_map(|group| group.people.iter().map(String::as_str))
+            .chain(self.debts_owed.iter().map(|debt| debt.person.as_str()))
+            .chain(
+                self.unpaid_advancements
+                    .iter()
+                    .map(|advc| advc.person.as_str()),
+            )
+            .collect();
+
+        for person in all_people {
+            let good = people_owe_user.get(person).map_or(Decimal::ZERO, |r| *r);
+            let bad = user_owes_people.get(person).map_or(Decimal::ZERO, |r| *r);
+            let balance = good - bad;
+            println!(
+                "  {:10} {ANSI_GREEN}{:8.2} {ANSI_RED}{:8.2}{ANSI_STOP}  TOTAL: {:+8.2}",
+                person, good, bad, balance
+            );
         }
     }
 }
 
-const KAKEBO_DB_FILE: &str = "test.kakebo";
+impl Default for Expenses {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-fn main() -> Result<(), KakeboError> {
+#[derive(Debug)]
+pub struct Environment {
+    pub config: KakeboConfig,
+    pub people: BTreeSet<String>,
+}
+
+fn parse_file<T>(path: &Path) -> Result<T, KakeboError>
+where
+    T: for<'de> Deserialize<'de> + Default,
+{
+    if !path.exists() {
+        println!("File {} does not exist.", path.display());
+        return Ok(T::default());
+    }
+    let mut file = File::open(path)?;
+    let passphrase = Password::new("Enter decryption password:")
+        .with_display_mode(inquire::PasswordDisplayMode::Hidden)
+        .without_confirmation()
+        .prompt()?;
+    let decryptor = match Decryptor::new(&mut file)? {
+        Decryptor::Passphrase(decr) => decr,
+        _ => unreachable!(),
+    };
+    let mut decrypt_reader = decryptor.decrypt(&Secret::new(passphrase.to_owned()), None)?;
+    let mut decode_reader = FrameDecoder::new(&mut decrypt_reader);
+    let expenses = rmp_serde::decode::from_read(&mut decode_reader)?;
+    println!("Expenses parsed from {}", path.display());
+    Ok(expenses)
+}
+
+fn write_file<T>(path: &Path, expenses: &T) -> Result<(), KakeboError>
+where
+    T: Serialize,
+{
+    let mut file = File::create(path)?;
+    let passphrase = Password::new("Enter encryption password:")
+        .with_display_mode(inquire::PasswordDisplayMode::Hidden)
+        .without_confirmation()
+        .prompt()?;
+    let encryptor = Encryptor::with_user_passphrase(Secret::new(passphrase.to_owned()));
+    let mut encrypt_writer = encryptor.wrap_output(&mut file)?;
+    let mut compress_writer = FrameEncoder::new(&mut encrypt_writer);
+    rmp_serde::encode::write(&mut compress_writer, expenses)?;
+    compress_writer.finish()?;
+    encrypt_writer.finish()?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+/// a function that simplifies tranforming older versions of the data structure into new ones
+fn transform<Src, Dst>(path: &Path) -> Result<(), KakeboError>
+where
+    Src: for<'de> Deserialize<'de> + Default,
+    Dst: Serialize + From<Src>,
+{
+    let from_content: Src = parse_file(path)?;
+    let to_content: Dst = from_content.into();
+    write_file(path, &to_content)
+}
+
+pub const ANSI_RED: &str = "\x1b[31m";
+pub const ANSI_GREEN: &str = "\x1b[32m";
+pub const ANSI_STOP: &str = "\x1b[0m";
+
+fn run() -> Result<(), KakeboError> {
     let args = Args::parse();
     let config = parse_config()?;
 
-    let path = Path::new(KAKEBO_DB_FILE);
+    let path = config.database_dir.join(KAKEBO_DB_FILE);
 
-    let mut expenses = if path.exists() {
-        let file = File::open(path)?;
-        let mut file_reader = BufReader::new(file);
-        // TODO: find and fix the bug in the following code to make encryption and decompression work
-        // print!("Enter decryption password: ");
-        // stdout().flush()?;
-        // let passphrase = read_password()?;
-        // let decryptor = match Decryptor::new(&mut file_reader)? {
-        //     Decryptor::Passphrase(decr) => decr,
-        //     _ => unreachable!(),
-        // };
-        // let mut decrypt_reader = decryptor.decrypt(&Secret::new(passphrase.to_owned()), None)?;
-        // let mut decode_reader = FrameDecoder::new(decrypt_reader);
-        rmp_serde::decode::from_read(&mut file_reader)?
-    } else {
-        println!("Starting with an empty database");
-        Expenses::new()
+    let mut expenses: Expenses = parse_file(&path)?;
+    let mut environment = Environment {
+        config,
+        people: expenses
+            .group_expenses
+            .iter()
+            .flat_map(|group| group.people.iter())
+            .chain(expenses.debts_owed.iter().map(|debt| &debt.person))
+            .chain(expenses.unpaid_advancements.iter().map(|advc| &advc.person))
+            .map(String::clone)
+            .collect(),
     };
 
     if args.debug {
@@ -129,33 +324,162 @@ fn main() -> Result<(), KakeboError> {
         );
     }
 
-    match args.command {
-        Command::Status => println!("Status"),
+    let changes_made = match args.command {
+        Command::Status { expense_type } => {
+            match expense_type {
+                None => {
+                    println!("===== STATUS =====");
+                    println!("User: {}", environment.config.user_name);
+                    println!("Currency: {}", environment.config.currency);
+                    expenses.print_status();
+                    if args.debug {
+                        println!("{:?}", expenses)
+                    }
+                }
+                Some(ExpenseType::Single) => {
+                    let options: Vec<_> = expenses.single_expenses.iter_mut().rev().collect();
+                    let to_view = Select::new("Which single expense do you want to view?", options)
+                        .prompt()?;
+                    println!("{}", to_view)
+                }
+                Some(ExpenseType::Group) => {
+                    let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
+                    let to_view = Select::new("Which group expense do you want to view?", options)
+                        .prompt()?;
+                    to_view.print(&environment.config);
+                }
+                Some(ExpenseType::Recurring) => {
+                    let options: Vec<_> = expenses.recurring_expenses.iter_mut().rev().collect();
+                    let to_view =
+                        Select::new("Which recurring expense do you want to view?", options)
+                            .prompt()?;
+                    println!("{}", to_view)
+                }
+                Some(ExpenseType::Todo) => {
+                    let options: Vec<_> = expenses.debts_owed.iter_mut().rev().collect();
+                    let to_view =
+                        Select::new("Which open debt do you want to view?", options).prompt()?;
+                    println!("{}", to_view)
+                }
+                Some(ExpenseType::Advance) => {
+                    let options: Vec<_> = expenses.unpaid_advancements.iter_mut().rev().collect();
+                    let to_view =
+                        Select::new("Which unpaid advancement do you want to view?", options)
+                            .prompt()?;
+                    println!("{}", to_view)
+                }
+            }
+            false
+        }
         Command::Add { expense_type } => {
             match expense_type {
                 ExpenseType::Single => {
-                    let single = SingleExpense::new(&config)?;
-                    println!("{:?}", single);
+                    let single = SingleExpense::new(&environment.config)?;
+                    if args.debug {
+                        println!("{:?}", single);
+                    }
                     expenses.single_expenses.push(single);
                 }
                 ExpenseType::Group => {
-                    let group = GroupExpense::new(&config)?;
-                    println!("{:?}", group);
-                    println!("Raw Total {:?}", group.raw_total());
-                    println!("Raw Total (scaled) {:?}", group.raw_total().scale());
-                    println!("True user amount {:?}", group.true_user_amount());
-                    println!("True amounts {:?}", group.true_amounts());
+                    let group = GroupExpense::new(&environment)?;
+                    if args.debug {
+                        println!("{:?}", group);
+                    }
+                    environment
+                        .people
+                        .extend(group.people.iter().map(String::clone));
                     expenses.group_expenses.push(group);
                 }
-                ExpenseType::Recurring => println!("Add group"),
-            };
+                ExpenseType::Recurring => {
+                    let recurring = RecurringExpense::new(&environment.config)?;
+                    if args.debug {
+                        println!("{:?}", recurring);
+                    }
+                    expenses.recurring_expenses.push(recurring);
+                }
+                ExpenseType::Todo => {
+                    let debt = Debt::new(&environment)?;
+                    if args.debug {
+                        println!("{:?}", debt);
+                    }
+                    environment.people.insert(debt.person.clone());
+                    expenses.debts_owed.push(debt);
+                }
+                ExpenseType::Advance => {
+                    let advancement = Advancement::new(&environment)?;
+                    if args.debug {
+                        println!("{:?}", advancement);
+                    }
+                    environment.people.insert(advancement.person.clone());
+                    expenses.unpaid_advancements.push(advancement);
+                }
+            }
+            true
         }
-        Command::Edit { expense_type } => match expense_type {
-            ExpenseType::Single => println!("Edit single"),
-            ExpenseType::Group => println!("Edit group"),
-            ExpenseType::Recurring => println!("Edit recurring"),
-        },
-        Command::Receive { value, from } => println!("Receive {} from {}", value, from),
+        Command::Edit { expense_type } => {
+            println!("Editing...");
+            match expense_type {
+                ExpenseType::Single => todo!("Edit single expenses"),
+                ExpenseType::Group => {
+                    let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
+                    let to_edit = Select::new("Which group expense do you want to edit?", options)
+                        .prompt()?;
+                    to_edit.edit(&environment.config)?;
+                }
+                ExpenseType::Recurring => todo!("Edit recurring expenses"),
+                ExpenseType::Todo => {
+                    let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
+                    let to_edit =
+                        Select::new("Which debt do you want to edit?", options).prompt()?;
+                    println!("{}", to_edit);
+                    let payed_up = Confirm::new(&format!(
+                        "Have you paid {} back the {}{}?",
+                        to_edit.person, to_edit.expense.amount, environment.config.currency
+                    ))
+                    .prompt()?;
+                    if payed_up {
+                        let index = expenses
+                            .debts_owed
+                            .iter()
+                            .position(|debt| debt == to_edit)
+                            .expect("The debt we edit must exist");
+                        let debt_paid = expenses.debts_owed.remove(index);
+                        expenses.single_expenses.push(debt_paid.expense);
+                    }
+                }
+                ExpenseType::Advance => {
+                    let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
+                    let to_edit =
+                        Select::new("Which debt do you want to edit?", options).prompt()?;
+                    println!("{}", to_edit);
+                    let payed_up = Confirm::new(&format!(
+                        "Has {} paid you back the {}{}?",
+                        to_edit.person, to_edit.amount, environment.config.currency
+                    ))
+                    .prompt()?;
+                    if payed_up {
+                        let index = expenses
+                            .unpaid_advancements
+                            .iter()
+                            .position(|advancement| advancement == to_edit)
+                            .expect("The advancement we edit must exist");
+                        expenses.unpaid_advancements.remove(index);
+                    }
+                }
+            }
+            true
+        }
+        Command::Receive { value, from } => {
+            if let Some(src) = from {
+                todo!("Receive {} from {}", value, src)
+            } else {
+                todo!("Receive {}", value);
+            }
+        }
+    };
+
+    if !changes_made {
+        return Ok(());
     }
 
     if args.debug {
@@ -165,16 +489,15 @@ fn main() -> Result<(), KakeboError> {
         );
     }
 
-    let file = File::create(KAKEBO_DB_FILE)?;
-    let mut file_writer = BufWriter::new(file);
-    // TODO: find and fix the bug in the following code to make encryption and decompression work
-    // print!("Enter encryption password: ");
-    // stdout().flush()?;
-    // let passphrase = read_password()?;
-    // let encryptor = Encryptor::with_user_passphrase(Secret::new(passphrase.to_owned()));
-    // let mut encrypt_writer = encryptor.wrap_output(&mut file_writer)?;
-    // let mut compress_writer = FrameEncoder::new(encrypt_writer);
-    rmp_serde::encode::write_named(&mut file_writer, &expenses)?;
+    let path = Path::new(KAKEBO_DB_FILE);
+    write_file(path, &expenses)
+}
 
-    Ok(())
+fn main() -> ExitCode {
+    let result = run();
+    if let Err(error) = result {
+        println!("{}", error);
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
 }
