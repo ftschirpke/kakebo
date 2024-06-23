@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use inquire::Confirm;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -13,6 +15,12 @@ use super::ExpenseInfo;
 pub struct SingleExpense {
     pub amount: Decimal,
     pub info: ExpenseInfo,
+}
+
+impl Display for SingleExpense {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({:8.2})", self.info, self.amount)
+    }
 }
 
 impl SingleExpense {

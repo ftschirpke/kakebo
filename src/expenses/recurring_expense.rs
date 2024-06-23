@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use chrono::Local;
 use chrono::NaiveDate;
 use chrono::Weekday;
@@ -23,6 +25,21 @@ pub struct RecurringExpense {
     pub info: ExpenseInfo,
     every: DateDelta,
     end_date: Option<NaiveDate>,
+}
+
+impl Display for RecurringExpense {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let end = if let Some(e) = self.end_date {
+            format!("until {}", e.clone())
+        } else {
+            "without end".to_string()
+        };
+        write!(
+            f,
+            "{} ({:8.2} every {} {})",
+            self.info, self.amount, self.every, end
+        )
+    }
 }
 
 impl RecurringExpense {
@@ -75,6 +92,21 @@ enum DateDelta {
     Weeks(u8),
     Months(u8),
     Years(u8),
+}
+
+impl Display for DateDelta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            DateDelta::Days(1) => write!(f, "every day"),
+            DateDelta::Days(n) => write!(f, "every {} days", n),
+            DateDelta::Weeks(1) => write!(f, "every week"),
+            DateDelta::Weeks(n) => write!(f, "every {} weeks", n),
+            DateDelta::Months(1) => write!(f, "every month"),
+            DateDelta::Months(n) => write!(f, "every {} months", n),
+            DateDelta::Years(1) => write!(f, "every year"),
+            DateDelta::Years(n) => write!(f, "every {} years", n),
+        }
+    }
 }
 
 impl From<&DateDelta> for RelativeDuration {

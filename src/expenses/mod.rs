@@ -1,3 +1,5 @@
+use std::{fmt::Display, iter::once};
+
 use chrono::{Local, NaiveDate, Weekday};
 use inquire::{
     error::InquireResult, required, validator::Validation, CustomType, DateSelect, Select, Text,
@@ -5,7 +7,7 @@ use inquire::{
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{errors::KakeboError, KakeboConfig};
+use crate::{errors::KakeboError, Environment, KakeboConfig};
 
 pub mod advancement;
 pub mod debt;
@@ -31,6 +33,20 @@ pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal>
             config.currency
         ))
         .prompt()
+}
+
+const NEW_PERSON: &str = "Add new Person";
+
+pub fn person(prompt: &str, environment: &Environment) -> InquireResult<String> {
+    let options_vec: Vec<_> = once(NEW_PERSON)
+        .chain(environment.people.iter().map(String::as_str))
+        .collect();
+    let selected = Select::new(prompt, options_vec).prompt()?;
+    if selected == NEW_PERSON {
+        Text::new(prompt).prompt()
+    } else {
+        Ok(selected.to_string())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,11 +83,26 @@ impl ExpenseInfo {
     }
 }
 
+impl Display for ExpenseInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {}: {}",
+            self.date,
+            self.category,
+            self.description
+                .as_ref()
+                .map_or("No description", |descr| descr.as_str())
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-enum ExpenseCategory {
+pub enum ExpenseCategory {
     ReplacementOrRepair,
     Groceries,
-    Social,
+    Family,
+    Friends,
     Hobby,
     Restaurant,
     Entertainment,
@@ -83,7 +114,8 @@ impl From<String> for ExpenseCategory {
         match value.as_str() {
             "Replacement or Repair" => Self::ReplacementOrRepair,
             "Groceries" => Self::Groceries,
-            "Social" => Self::Social,
+            "Family" => Self::Family,
+            "Friends" => Self::Friends,
             "Hobby" => Self::Hobby,
             "Restaurant" => Self::Restaurant,
             "Entertainment" => Self::Entertainment,
@@ -92,12 +124,29 @@ impl From<String> for ExpenseCategory {
     }
 }
 
+impl Display for ExpenseCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            ExpenseCategory::ReplacementOrRepair => "Replacement or Repair",
+            ExpenseCategory::Groceries => "Groceries",
+            ExpenseCategory::Family => "Family",
+            ExpenseCategory::Friends => "Friends",
+            ExpenseCategory::Hobby => "Hobby",
+            ExpenseCategory::Restaurant => "Restaurant",
+            ExpenseCategory::Entertainment => "Entertainment",
+            ExpenseCategory::Other(ref inner) => inner.as_str(),
+        };
+        write!(f, "{}", str)
+    }
+}
+
 impl ExpenseCategory {
     fn options() -> Vec<&'static str> {
         vec![
             "Replacement or Repair",
             "Groceries",
-            "Social",
+            "Family",
+            "Friends",
             "Hobby",
             "Restaurant",
             "Entertainment",

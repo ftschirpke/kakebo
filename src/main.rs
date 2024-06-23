@@ -1,7 +1,8 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    cmp::Ordering,
+    collections::{BTreeSet, HashMap},
     fs::File,
-    path::Path,
+    path::{Path, PathBuf},
     process::ExitCode,
 };
 
@@ -13,7 +14,7 @@ use expenses::{
     advancement::Advancement, debt::Debt, group_expense::GroupExpense,
     recurring_expense::RecurringExpense, single_expense::SingleExpense,
 };
-use inquire::Password;
+use inquire::{Confirm, Password, Select};
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -23,11 +24,15 @@ use self::errors::KakeboError;
 mod errors;
 mod expenses;
 
+const BACKUP_DB_FILE: &str = "backup.kakebo";
+const KAKEBO_DB_FILE: &str = "test.kakebo";
+
 #[derive(Debug, Deserialize)]
 pub struct KakeboConfig {
     pub currency: char,
     pub decimal_sep: char,
     pub user_name: String,
+    pub database_dir: PathBuf,
 }
 
 fn parse_config() -> Result<KakeboConfig, KakeboError> {
@@ -38,9 +43,10 @@ fn parse_config() -> Result<KakeboConfig, KakeboError> {
         println!("No config file found at {}", config_path.display());
         println!(
             "Please create a config file. A minimal config would look like this:
-\"user_name\" = \"Your name\"
-\"currency\" = \"$\"
-\"decimal_sep\" = \".\""
+user_name = \"Your name\"
+currency = \"$\"
+decimal_sep = \".\"
+database_dir = \"/home/<username>/<path>/<to>/<dir>\""
         );
         return Err(KakeboError::InvalidArgument("No config file found".into()));
     }
@@ -62,9 +68,18 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    Status,
-    Edit,
+    Status {
+        #[command(subcommand)]
+        expense_type: Option<ExpenseType>,
+    },
+    Restore {
+        file: PathBuf,
+    },
     Add {
+        #[command(subcommand)]
+        expense_type: ExpenseType,
+    },
+    Edit {
         #[command(subcommand)]
         expense_type: ExpenseType,
     },
@@ -108,6 +123,113 @@ impl Expenses {
             unpaid_advancements: Vec::new(),
         }
     }
+
+    pub fn print_status(&self) {
+        println!("Expenses Overview:");
+        let today = Local::now().date_naive();
+        let month_ago = today - RelativeDuration::months(1);
+
+        let single_expenses_last_month: Decimal = self
+            .single_expenses
+            .iter()
+            .filter(|expense| expense.info.date > month_ago && expense.info.date <= today)
+            .map(|expense| expense.amount)
+            .sum();
+        let group_expenses_last_month: Decimal = self
+            .group_expenses
+            .iter()
+            .filter(|expense| expense.info.date > month_ago && expense.info.date <= today)
+            .map(GroupExpense::true_user_amount)
+            .sum::<Decimal>();
+        let recurring_expenses_last_month: Decimal = self
+            .recurring_expenses
+            .iter()
+            .map(|expense| expense.amount_in_interval(month_ago, today))
+            .sum::<Decimal>();
+        println!(
+            "  Single Expenses last month:    {:8.2}",
+            single_expenses_last_month
+        );
+        println!(
+            "  Group Expenses last month:     {:8.2}",
+            group_expenses_last_month
+        );
+        println!(
+            "  Recurring Expenses last month: {:8.2}",
+            recurring_expenses_last_month
+        );
+        println!(
+            "  Total Expenses last month:     {:8.2}",
+            single_expenses_last_month + group_expenses_last_month + recurring_expenses_last_month
+        );
+
+        println!("Balances:");
+        let mut people_owe_user: HashMap<&str, Decimal> = HashMap::new();
+        let mut user_owes_people: HashMap<&str, Decimal> = HashMap::new();
+
+        let debts_from_group_expenses = self.group_expenses.iter().flat_map(|group_expense| {
+            group_expense.people.iter().zip(
+                group_expense
+                    .true_amounts()
+                    .into_iter()
+                    .zip(group_expense.paid_amounts.iter()),
+            )
+        });
+        for (person, (amount, already_paid)) in debts_from_group_expenses {
+            let paid = already_paid.unwrap_or(Decimal::ZERO);
+            match paid.cmp(&amount) {
+                Ordering::Less => {
+                    let owed: Decimal = amount - paid;
+                    people_owe_user
+                        .entry(person)
+                        .and_modify(|val| *val += owed)
+                        .or_insert(owed);
+                }
+                Ordering::Greater => {
+                    let overpaid: Decimal = paid - amount;
+                    user_owes_people
+                        .entry(person)
+                        .and_modify(|val| *val += overpaid)
+                        .or_insert(overpaid);
+                }
+                Ordering::Equal => {}
+            }
+        }
+        for debt in &self.debts_owed {
+            user_owes_people
+                .entry(&debt.person)
+                .and_modify(|val| *val += debt.expense.amount)
+                .or_insert(debt.expense.amount);
+        }
+        for advancement in &self.unpaid_advancements {
+            people_owe_user
+                .entry(&advancement.person)
+                .and_modify(|val| *val += advancement.amount)
+                .or_insert(advancement.amount);
+        }
+
+        let all_people: BTreeSet<_> = self
+            .group_expenses
+            .iter()
+            .flat_map(|group| group.people.iter().map(String::as_str))
+            .chain(self.debts_owed.iter().map(|debt| debt.person.as_str()))
+            .chain(
+                self.unpaid_advancements
+                    .iter()
+                    .map(|advc| advc.person.as_str()),
+            )
+            .collect();
+
+        for person in all_people {
+            let good = people_owe_user.get(person).map_or(Decimal::ZERO, |r| *r);
+            let bad = user_owes_people.get(person).map_or(Decimal::ZERO, |r| *r);
+            let balance = good - bad;
+            println!(
+                "  {:10} {ANSI_GREEN}{:8.2} {ANSI_RED}{:8.2}{ANSI_STOP}  TOTAL: {:+8.2}",
+                person, good, bad, balance
+            );
+        }
+    }
 }
 
 impl Default for Expenses {
@@ -116,11 +238,18 @@ impl Default for Expenses {
     }
 }
 
+#[derive(Debug)]
+pub struct Environment {
+    pub config: KakeboConfig,
+    pub people: BTreeSet<String>,
+}
+
 fn parse_file<T>(path: &Path) -> Result<T, KakeboError>
 where
     T: for<'de> Deserialize<'de> + Default,
 {
     if !path.exists() {
+        println!("File {} does not exist.", path.display());
         return Ok(T::default());
     }
     let mut file = File::open(path)?;
@@ -169,20 +298,34 @@ where
     write_file(path, &to_content)
 }
 
-const KAKEBO_DB_FILE: &str = "test.kakebo";
-const ANSI_RED: &str = "\x1b[31m";
-const ANSI_GREEN: &str = "\x1b[32m";
-const ANSI_STOP: &str = "\x1b[0m";
+pub const ANSI_RED: &str = "\x1b[31m";
+pub const ANSI_GREEN: &str = "\x1b[32m";
+pub const ANSI_STOP: &str = "\x1b[0m";
 
 fn run() -> Result<(), KakeboError> {
     let args = Args::parse();
     let config = parse_config()?;
 
-    let cur_dir = std::env::current_dir()?;
-    // let path = cur_dir.join(DEBUG_DB_FILE);
-    let path = cur_dir.join(KAKEBO_DB_FILE);
+    let path = config.database_dir.join(KAKEBO_DB_FILE);
+
+    if let Command::Restore { file } = &args.command {
+        let expenses: Expenses = ron::de::from_str(&std::fs::read_to_string(file)?)?;
+        let path = Path::new(KAKEBO_DB_FILE);
+        return write_file(path, &expenses);
+    }
 
     let mut expenses: Expenses = parse_file(&path)?;
+    let mut environment = Environment {
+        config,
+        people: expenses
+            .group_expenses
+            .iter()
+            .flat_map(|group| group.people.iter())
+            .chain(expenses.debts_owed.iter().map(|debt| &debt.person))
+            .chain(expenses.unpaid_advancements.iter().map(|advc| &advc.person))
+            .map(String::clone)
+            .collect(),
+    };
 
     if args.debug {
         println!(
@@ -192,171 +335,157 @@ fn run() -> Result<(), KakeboError> {
     }
 
     let changes_made = match args.command {
-        Command::Status => {
-            println!("===== STATUS =====");
-            println!("User: {}", config.user_name);
-            println!("Currency: {}", config.currency);
-
-            println!("Expenses Overview:");
-            let today = Local::now().date_naive();
-            let month_ago = today - RelativeDuration::months(1);
-
-            let single_expenses_last_month: Decimal = expenses
-                .single_expenses
-                .iter()
-                .filter(|expense| expense.info.date > month_ago && expense.info.date <= today)
-                .map(|expense| expense.amount)
-                .sum();
-            let group_expenses_last_month: Decimal = expenses
-                .group_expenses
-                .iter()
-                .filter(|expense| expense.info.date > month_ago && expense.info.date <= today)
-                .map(GroupExpense::true_user_amount)
-                .sum::<Decimal>();
-            let recurring_expenses_last_month: Decimal = expenses
-                .recurring_expenses
-                .iter()
-                .map(|expense| expense.amount_in_interval(month_ago, today))
-                .sum::<Decimal>();
-            println!(
-                "  Single Expenses last month:    {:8.2}",
-                single_expenses_last_month
-            );
-            println!(
-                "  Group Expenses last month:     {:8.2}",
-                group_expenses_last_month
-            );
-            println!(
-                "  Recurring Expenses last month: {:8.2}",
-                recurring_expenses_last_month
-            );
-
-            println!("Balances:");
-            let mut people_owe_user: HashMap<&str, Decimal> = HashMap::new();
-            let mut user_owes_people: HashMap<&str, Decimal> = HashMap::new();
-
-            let debts_from_group_expenses =
-                expenses.group_expenses.iter().flat_map(|group_expense| {
-                    group_expense.people.iter().zip(
-                        group_expense
-                            .true_amounts()
-                            .into_iter()
-                            .zip(group_expense.paid_amounts.iter()),
-                    )
-                });
-            for (person, (amount, already_paid)) in debts_from_group_expenses {
-                if let Some(paid) = already_paid {
-                    if *paid < amount {
-                        let owed: Decimal = amount - paid;
-                        people_owe_user
-                            .entry(person)
-                            .and_modify(|val| *val += owed)
-                            .or_insert(owed);
-                    } else if *paid > amount {
-                        let overpaid: Decimal = paid - amount;
-                        user_owes_people
-                            .entry(person)
-                            .and_modify(|val| *val += overpaid)
-                            .or_insert(overpaid);
+        Command::Restore { .. } => unreachable!("Restoration should have already happened."),
+        Command::Status { expense_type } => {
+            match expense_type {
+                None => {
+                    println!("===== STATUS =====");
+                    println!("User: {}", environment.config.user_name);
+                    println!("Currency: {}", environment.config.currency);
+                    expenses.print_status();
+                    if args.debug {
+                        println!("{:?}", expenses)
                     }
-                } else {
-                    people_owe_user
-                        .entry(person)
-                        .and_modify(|val| *val += amount)
-                        .or_insert(amount);
+                }
+                Some(ExpenseType::Single) => {
+                    let options: Vec<_> = expenses.single_expenses.iter_mut().rev().collect();
+                    let to_view = Select::new("Which single expense do you want to view?", options)
+                        .prompt()?;
+                    println!("{}", to_view)
+                }
+                Some(ExpenseType::Group) => {
+                    let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
+                    let to_view = Select::new("Which group expense do you want to view?", options)
+                        .prompt()?;
+                    to_view.print(&environment.config);
+                }
+                Some(ExpenseType::Recurring) => {
+                    let options: Vec<_> = expenses.recurring_expenses.iter_mut().rev().collect();
+                    let to_view =
+                        Select::new("Which recurring expense do you want to view?", options)
+                            .prompt()?;
+                    println!("{}", to_view)
+                }
+                Some(ExpenseType::Todo) => {
+                    let options: Vec<_> = expenses.debts_owed.iter_mut().rev().collect();
+                    let to_view =
+                        Select::new("Which open debt do you want to view?", options).prompt()?;
+                    println!("{}", to_view)
+                }
+                Some(ExpenseType::Advance) => {
+                    let options: Vec<_> = expenses.unpaid_advancements.iter_mut().rev().collect();
+                    let to_view =
+                        Select::new("Which unpaid advancement do you want to view?", options)
+                            .prompt()?;
+                    println!("{}", to_view)
                 }
             }
-            for debt in &expenses.debts_owed {
-                user_owes_people
-                    .entry(&debt.person)
-                    .and_modify(|val| *val += debt.expense.amount)
-                    .or_insert(debt.expense.amount);
-            }
-            for advancement in &expenses.unpaid_advancements {
-                people_owe_user
-                    .entry(&advancement.person)
-                    .and_modify(|val| *val += advancement.amount)
-                    .or_insert(advancement.amount);
-            }
-
-            let all_people: BTreeSet<_> = expenses
-                .group_expenses
-                .iter()
-                .flat_map(|group| group.people.iter())
-                .chain(expenses.debts_owed.iter().map(|debt| &debt.person))
-                .chain(expenses.unpaid_advancements.iter().map(|advc| &advc.person))
-                .collect();
-
-            for person in all_people {
-                let good = people_owe_user
-                    .get(person.as_str())
-                    .map_or(Decimal::ZERO, |r| *r);
-                let bad = user_owes_people
-                    .get(person.as_str())
-                    .map_or(Decimal::ZERO, |r| *r);
-                let balance = good - bad;
-                println!(
-                    "  {:10} {ANSI_GREEN}{:8.2} {ANSI_RED}{:8.2}{ANSI_STOP}  TOTAL: {:+8.2}",
-                    person, good, bad, balance
-                );
-            }
-
-            if args.debug {
-                println!("{:?}", expenses)
-            }
-            false
-        }
-        Command::Edit => {
-            println!("Edit...");
             false
         }
         Command::Add { expense_type } => {
             match expense_type {
                 ExpenseType::Single => {
-                    let single = SingleExpense::new(&config)?;
+                    let single = SingleExpense::new(&environment.config)?;
                     if args.debug {
                         println!("{:?}", single);
                     }
                     expenses.single_expenses.push(single);
                 }
                 ExpenseType::Group => {
-                    let group = GroupExpense::new(&config)?;
+                    let group = GroupExpense::new(&environment)?;
                     if args.debug {
                         println!("{:?}", group);
                     }
+                    environment
+                        .people
+                        .extend(group.people.iter().map(String::clone));
                     expenses.group_expenses.push(group);
                 }
                 ExpenseType::Recurring => {
-                    let recurring = RecurringExpense::new(&config)?;
+                    let recurring = RecurringExpense::new(&environment.config)?;
                     if args.debug {
                         println!("{:?}", recurring);
                     }
                     expenses.recurring_expenses.push(recurring);
                 }
                 ExpenseType::Todo => {
-                    let debt = Debt::new(&config)?;
+                    let debt = Debt::new(&environment)?;
                     if args.debug {
                         println!("{:?}", debt);
                     }
+                    environment.people.insert(debt.person.clone());
                     expenses.debts_owed.push(debt);
                 }
                 ExpenseType::Advance => {
-                    let advancement = Advancement::new(&config)?;
+                    let advancement = Advancement::new(&environment)?;
                     if args.debug {
                         println!("{:?}", advancement);
                     }
+                    environment.people.insert(advancement.person.clone());
                     expenses.unpaid_advancements.push(advancement);
+                }
+            }
+            true
+        }
+        Command::Edit { expense_type } => {
+            println!("Editing...");
+            match expense_type {
+                ExpenseType::Single => todo!("Edit single expenses"),
+                ExpenseType::Group => {
+                    let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
+                    let to_edit = Select::new("Which group expense do you want to edit?", options)
+                        .prompt()?;
+                    to_edit.edit(&environment.config)?;
+                }
+                ExpenseType::Recurring => todo!("Edit recurring expenses"),
+                ExpenseType::Todo => {
+                    let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
+                    let to_edit =
+                        Select::new("Which debt do you want to edit?", options).prompt()?;
+                    println!("{}", to_edit);
+                    let payed_up = Confirm::new(&format!(
+                        "Have you paid {} back the {}{}?",
+                        to_edit.person, to_edit.expense.amount, environment.config.currency
+                    ))
+                    .prompt()?;
+                    if payed_up {
+                        let index = expenses
+                            .debts_owed
+                            .iter()
+                            .position(|debt| debt == to_edit)
+                            .expect("The debt we edit must exist");
+                        let debt_paid = expenses.debts_owed.remove(index);
+                        expenses.single_expenses.push(debt_paid.expense);
+                    }
+                }
+                ExpenseType::Advance => {
+                    let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
+                    let to_edit =
+                        Select::new("Which debt do you want to edit?", options).prompt()?;
+                    println!("{}", to_edit);
+                    let payed_up = Confirm::new(&format!(
+                        "Has {} paid you back the {}{}?",
+                        to_edit.person, to_edit.amount, environment.config.currency
+                    ))
+                    .prompt()?;
+                    if payed_up {
+                        let index = expenses
+                            .unpaid_advancements
+                            .iter()
+                            .position(|advancement| advancement == to_edit)
+                            .expect("The advancement we edit must exist");
+                        expenses.unpaid_advancements.remove(index);
+                    }
                 }
             }
             true
         }
         Command::Receive { value, from } => {
             if let Some(src) = from {
-                println!("Receive {} from {}", value, src);
+                todo!("Receive {} from {}", value, src)
             } else {
-                println!("Receive {}", value);
+                todo!("Receive {}", value);
             }
-            false
         }
     };
 
@@ -370,6 +499,10 @@ fn run() -> Result<(), KakeboError> {
             expenses
         );
     }
+
+    // HACK: this is just for development purposes, in case of broken output
+    let backup = Path::new(BACKUP_DB_FILE);
+    std::fs::write(backup, ron::ser::to_string(&expenses)?)?;
 
     let path = Path::new(KAKEBO_DB_FILE);
     write_file(path, &expenses)
