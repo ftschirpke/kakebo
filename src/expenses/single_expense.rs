@@ -11,8 +11,8 @@ use super::ExpenseInfo;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SingleExpense {
-    amount: Decimal,
-    info: ExpenseInfo,
+    pub amount: Decimal,
+    pub info: ExpenseInfo,
 }
 
 impl SingleExpense {

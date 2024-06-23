@@ -11,12 +11,12 @@ use super::{money_amount, ExpenseInfo};
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// a group expense that distributes extra costs such as tips or delivery fees fairly
 pub struct GroupExpense {
-    info: ExpenseInfo,
+    pub info: ExpenseInfo,
     raw_user_amount: Decimal,
-    people: Vec<String>,
+    pub people: Vec<String>,
     raw_amounts: Vec<Decimal>,
     total_amount: Decimal,
-    paid_amounts: Vec<Option<Decimal>>,
+    pub paid_amounts: Vec<Option<Decimal>>,
 }
 
 impl GroupExpense {

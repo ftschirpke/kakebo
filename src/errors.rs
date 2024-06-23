@@ -8,6 +8,8 @@ pub enum KakeboError {
     InvalidArgument(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("(De)Compression error: {0}")]
+    Compression(#[from] lz4_flex::frame::Error),
     #[error("Decryption error: {0}")]
     Decryption(#[from] age::DecryptError),
     #[error("Encryption error: {0}")]

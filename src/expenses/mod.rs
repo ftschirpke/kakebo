@@ -1,16 +1,29 @@
-use chrono::{Local, NaiveDate};
-use inquire::{error::InquireResult, required, CustomType, DateSelect, Select, Text};
+use chrono::{Local, NaiveDate, Weekday};
+use inquire::{
+    error::InquireResult, required, validator::Validation, CustomType, DateSelect, Select, Text,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::{errors::KakeboError, KakeboConfig};
 
+pub mod advancement;
+pub mod debt;
 pub mod group_expense;
-// pub mod recurring_expense;
+pub mod recurring_expense;
 pub mod single_expense;
 
 pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal> {
     CustomType::new(&format!("Amount {name}:"))
+        .with_validator(|&input: &Decimal| {
+            if input > Decimal::ZERO {
+                Ok(Validation::Valid)
+            } else {
+                Ok(Validation::Invalid(
+                    "Amount must be positive (non-zero).".into(),
+                ))
+            }
+        })
         .with_formatter(&|decimal: Decimal| format!("{:.2}{}", decimal, config.currency))
         .with_error_message("Please type a valid number")
         .with_help_message(&format!(
@@ -22,16 +35,18 @@ pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal>
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExpenseInfo {
-    category: ExpenseCategory,
-    description: Option<String>,
-    date: NaiveDate,
+    pub category: ExpenseCategory,
+    pub description: Option<String>,
+    pub date: NaiveDate,
     creation_date: NaiveDate,
 }
 
 impl ExpenseInfo {
     pub fn new() -> Result<Self, KakeboError> {
         let creation_date = Local::now().date_naive();
-        let date = DateSelect::new("Date:").prompt()?;
+        let date = DateSelect::new("Date:")
+            .with_week_start(Weekday::Mon)
+            .prompt()?;
         let category_text = Select::new("Category:", ExpenseCategory::options()).prompt()?;
         let category_text = if category_text == "Other" {
             Text::new("Other category:")
