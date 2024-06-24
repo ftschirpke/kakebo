@@ -6,11 +6,11 @@ pub enum KakeboError {
     InvalidArgument(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("(De)Compression error: {0}")]
+    #[error("LZ4 (De)Compression error: {0}")]
     Compression(#[from] lz4_flex::frame::Error),
-    #[error("LZ4 Decryption error: {0}")]
+    #[error("Age Decryption error: {0}")]
     Decryption(#[from] age::DecryptError),
-    #[error("LZ4 Encryption error: {0}")]
+    #[error("Age Encryption error: {0}")]
     Encryption(#[from] age::EncryptError),
     #[error("RMP decode error: {0}")]
     RmpDecode(#[from] rmp_serde::decode::Error),
