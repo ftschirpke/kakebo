@@ -424,8 +424,7 @@ fn run() -> Result<(), KakeboError> {
                     let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
                     let to_edit = Select::new("Which group expense do you want to edit?", options)
                         .prompt()?;
-                    to_edit.edit(&environment.config)?;
-                    true
+                    to_edit.edit(&environment.config)?
                 }
                 ExpenseType::Recurring => todo!("Edit recurring expenses"),
                 ExpenseType::Todo => {
