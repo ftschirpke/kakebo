@@ -1,6 +1,5 @@
 use std::fmt::Display;
 
-use chrono::Local;
 use chrono::NaiveDate;
 use chrono::Weekday;
 use chronoutil::RelativeDuration;
@@ -77,12 +76,6 @@ impl RecurringExpense {
             date = date + cycle;
         }
         total_amount
-    }
-
-    pub fn amount_in_last(&self, duration: RelativeDuration) -> Decimal {
-        let today = Local::now().date_naive();
-        let min = today - duration;
-        self.amount_in_interval(min, today)
     }
 }
 

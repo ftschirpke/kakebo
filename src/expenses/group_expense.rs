@@ -31,7 +31,8 @@ impl GroupExpense {
     }
 
     fn true_amount(&self, raw_amount: Decimal) -> Decimal {
-        raw_amount * self.total_amount / self.raw_total()
+        let true_amount_unscaled = raw_amount * self.total_amount / self.raw_total();
+        true_amount_unscaled.round_dp(2)
     }
 
     pub fn true_user_amount(&self) -> Decimal {
@@ -75,13 +76,16 @@ impl GroupExpense {
         let mut people = Vec::new();
         let mut raw_amounts = Vec::new();
 
+        let mut people_still_possible = environment.people.clone();
+
         loop {
-            let person_name = person("Add person:", environment)?;
+            let person_name = person("Add person:", &people_still_possible)?;
             if person_name.is_empty() {
                 break;
             }
             let person_amount =
                 money_amount(&environment.config, &format!("{} (raw)", person_name))?;
+            people_still_possible.remove(&person_name);
             people.push(person_name);
             raw_amounts.push(person_amount);
         }
@@ -124,7 +128,7 @@ impl GroupExpense {
         }
     }
 
-    pub fn edit(&mut self, config: &KakeboConfig) -> Result<(), KakeboError> {
+    pub fn edit(&mut self, config: &KakeboConfig) -> Result<bool, KakeboError> {
         self.print(config);
 
         let to_pay = self
@@ -142,16 +146,17 @@ impl GroupExpense {
             .people
             .iter()
             .zip(to_pay.enumerate())
-            .filter(|(_name, (_i, to_pay))| !to_pay.is_sign_negative())
+            .filter(|(_name, (_i, to_pay))| to_pay.is_sign_positive() && !to_pay.is_zero())
             .collect();
         if need_to_pay.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
+        let mut changes_made = false;
         loop {
             let options: Vec<String> = need_to_pay.keys().map(|&name| name.clone()).collect();
             let person_that_paid = Select::new("Who already payed?", options).prompt();
             if let Err(InquireError::OperationCanceled) = person_that_paid {
-                return Ok(());
+                return Ok(changes_made);
             }
             let person_that_paid = person_that_paid?;
             let paid_amount = money_amount(config, &format!("{} (paid)", person_that_paid))?;
@@ -161,6 +166,7 @@ impl GroupExpense {
                 .1
                  .0;
             self.paid_amounts[index] = Some(paid_amount);
+            changes_made = true;
         }
     }
 }

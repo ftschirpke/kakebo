@@ -35,7 +35,7 @@ impl Display for Advancement {
 impl Advancement {
     pub fn new(environment: &Environment) -> Result<Self, KakeboError> {
         let creation_date = Local::now().date_naive();
-        let person = person("Who owes you this money?", environment)?;
+        let person = person("Who owes you this money?", &environment.people)?;
         let date = DateSelect::new("Date:")
             .with_week_start(Weekday::Mon)
             .prompt()?;

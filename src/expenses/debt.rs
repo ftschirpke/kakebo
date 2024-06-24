@@ -27,7 +27,7 @@ impl Display for Debt {
 
 impl Debt {
     pub fn new(environment: &Environment) -> Result<Self, KakeboError> {
-        let person = person("Who do you owe this money to?", environment)?;
+        let person = person("Who do you owe this money to?", &environment.people)?;
         let expense = SingleExpense::new(&environment.config)?;
         Ok(Self { expense, person })
     }
