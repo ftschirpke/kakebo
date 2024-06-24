@@ -1,4 +1,4 @@
-use std::{fmt::Display, iter::once};
+use std::{collections::BTreeSet, fmt::Display, iter::once};
 
 use chrono::{Local, NaiveDate, Weekday};
 use inquire::{
@@ -7,7 +7,7 @@ use inquire::{
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{errors::KakeboError, Environment, KakeboConfig};
+use crate::{errors::KakeboError, KakeboConfig};
 
 pub mod advancement;
 pub mod debt;
@@ -37,9 +37,9 @@ pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal>
 
 const NEW_PERSON: &str = "Add new Person";
 
-pub fn person(prompt: &str, environment: &Environment) -> InquireResult<String> {
+pub fn person(prompt: &str, people: &BTreeSet<String>) -> InquireResult<String> {
     let options_vec: Vec<_> = once(NEW_PERSON)
-        .chain(environment.people.iter().map(String::as_str))
+        .chain(people.iter().map(String::as_str))
         .collect();
     let selected = Select::new(prompt, options_vec).prompt()?;
     if selected == NEW_PERSON {
@@ -101,6 +101,7 @@ impl Display for ExpenseInfo {
 pub enum ExpenseCategory {
     ReplacementOrRepair,
     Groceries,
+    Canteen,
     Family,
     Friends,
     Hobby,
@@ -114,6 +115,7 @@ impl From<String> for ExpenseCategory {
         match value.as_str() {
             "Replacement or Repair" => Self::ReplacementOrRepair,
             "Groceries" => Self::Groceries,
+            "Canteen" => Self::Canteen,
             "Family" => Self::Family,
             "Friends" => Self::Friends,
             "Hobby" => Self::Hobby,
@@ -129,6 +131,7 @@ impl Display for ExpenseCategory {
         let str = match self {
             ExpenseCategory::ReplacementOrRepair => "Replacement or Repair",
             ExpenseCategory::Groceries => "Groceries",
+            ExpenseCategory::Canteen => "Canteen",
             ExpenseCategory::Family => "Family",
             ExpenseCategory::Friends => "Friends",
             ExpenseCategory::Hobby => "Hobby",
@@ -145,6 +148,7 @@ impl ExpenseCategory {
         vec![
             "Replacement or Repair",
             "Groceries",
+            "Canteen",
             "Family",
             "Friends",
             "Hobby",

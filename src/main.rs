@@ -248,11 +248,11 @@ where
         println!("File {} does not exist.", path.display());
         return Ok(T::default());
     }
-    let mut file = File::open(path)?;
     let passphrase = Password::new("Enter decryption password:")
         .with_display_mode(inquire::PasswordDisplayMode::Hidden)
         .without_confirmation()
         .prompt()?;
+    let mut file = File::open(path)?;
     let decryptor = match Decryptor::new(&mut file)? {
         Decryptor::Passphrase(decr) => decr,
         _ => unreachable!(),
@@ -268,11 +268,11 @@ fn write_file<T>(path: &Path, expenses: &T) -> Result<(), KakeboError>
 where
     T: Serialize,
 {
-    let mut file = File::create(path)?;
     let passphrase = Password::new("Enter encryption password:")
         .with_display_mode(inquire::PasswordDisplayMode::Hidden)
         .without_confirmation()
         .prompt()?;
+    let mut file = File::create(path)?;
     let encryptor = Encryptor::with_user_passphrase(Secret::new(passphrase.to_owned()));
     let mut encrypt_writer = encryptor.wrap_output(&mut file)?;
     let mut compress_writer = FrameEncoder::new(&mut encrypt_writer);
@@ -425,6 +425,7 @@ fn run() -> Result<(), KakeboError> {
                     let to_edit = Select::new("Which group expense do you want to edit?", options)
                         .prompt()?;
                     to_edit.edit(&environment.config)?;
+                    true
                 }
                 ExpenseType::Recurring => todo!("Edit recurring expenses"),
                 ExpenseType::Todo => {
@@ -446,6 +447,7 @@ fn run() -> Result<(), KakeboError> {
                         let debt_paid = expenses.debts_owed.remove(index);
                         expenses.single_expenses.push(debt_paid.expense);
                     }
+                    payed_up
                 }
                 ExpenseType::Advance => {
                     let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
@@ -465,9 +467,9 @@ fn run() -> Result<(), KakeboError> {
                             .expect("The advancement we edit must exist");
                         expenses.unpaid_advancements.remove(index);
                     }
+                    payed_up
                 }
             }
-            true
         }
         Command::Receive { value, from } => {
             if let Some(src) = from {
@@ -489,8 +491,7 @@ fn run() -> Result<(), KakeboError> {
         );
     }
 
-    let path = Path::new(KAKEBO_DB_FILE);
-    write_file(path, &expenses)
+    write_file(&path, &expenses)
 }
 
 fn main() -> ExitCode {
