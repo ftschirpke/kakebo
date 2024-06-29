@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{errors::KakeboError, Environment, KakeboConfig, ANSI_GREEN, ANSI_RED, ANSI_STOP};
 
-use super::{money_amount, person, ExpenseInfo};
+use super::{money_amount, person, ExpenseInfo, NEW_PERSON};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// a group expense that distributes extra costs such as tips or delivery fees fairly
@@ -79,9 +79,13 @@ impl GroupExpense {
         let mut people_still_possible = environment.people.clone();
 
         loop {
-            let person_name = person("Add person:", &people_still_possible)?;
-            if person_name.is_empty() {
+            let person_result = person("Add person:", &people_still_possible);
+            if let Err(InquireError::OperationCanceled) = person_result {
                 break;
+            }
+            let person_name = person_result?;
+            if person_name == NEW_PERSON {
+                continue;
             }
             let person_amount =
                 money_amount(&environment.config, &format!("{} (raw)", person_name))?;
