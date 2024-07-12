@@ -5,7 +5,7 @@ use inquire::{DateSelect, Text};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{errors::KakeboError, Environment};
+use crate::{errors::KakeboError, DisplayableExpense, Environment};
 
 use super::{money_amount, person};
 
@@ -29,6 +29,16 @@ impl Display for Advancement {
             self.amount,
             self.person
         )
+    }
+}
+
+impl DisplayableExpense for Advancement {
+    fn name() -> &'static str {
+        "unpaid advancement"
+    }
+
+    fn plural_name() -> &'static str {
+        "unpaid advancements"
     }
 }
 

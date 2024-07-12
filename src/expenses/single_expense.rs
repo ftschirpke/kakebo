@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::errors::KakeboError;
+use crate::DisplayableExpense;
 use crate::KakeboConfig;
 
 use super::money_amount;
@@ -20,6 +21,16 @@ pub struct SingleExpense {
 impl Display for SingleExpense {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({:8.2})", self.info, self.amount)
+    }
+}
+
+impl DisplayableExpense for SingleExpense {
+    fn name() -> &'static str {
+        "single expense"
+    }
+
+    fn plural_name() -> &'static str {
+        "single expenses"
     }
 }
 
