@@ -173,7 +173,7 @@ impl GroupExpense {
             return Ok(false);
         }
         let mut changes_made = false;
-        loop {
+        while !need_to_pay.is_empty() {
             let options: Vec<String> = need_to_pay.keys().map(|&name| name.clone()).collect();
             let person_that_paid = Select::new("Who already payed?", options).prompt();
             if let Err(InquireError::OperationCanceled) = person_that_paid {
@@ -189,5 +189,6 @@ impl GroupExpense {
             self.paid_amounts[index] = Some(paid_amount);
             changes_made = true;
         }
+        Ok(changes_made)
     }
 }

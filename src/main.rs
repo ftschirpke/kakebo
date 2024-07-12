@@ -330,6 +330,10 @@ fn delete<T: DisplayableExpense>(
     expenses: &mut Vec<T>,
     config: &KakeboConfig,
 ) -> Result<bool, KakeboError> {
+    if expenses.is_empty() {
+        println!("No {} to delete.", T::plural_name());
+        return Ok(false);
+    }
     let options: Vec<_> = expenses.iter().rev().collect();
     let to_delete = Select::new(
         format!("Which {} do you want to delete?", T::name()).as_str(),
@@ -461,52 +465,68 @@ fn run() -> Result<(), KakeboError> {
             match expense_type {
                 ExpenseType::Single => todo!("Edit single expenses"),
                 ExpenseType::Group => {
-                    let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
-                    let to_edit = Select::new("Which group expense do you want to edit?", options)
-                        .prompt()?;
-                    to_edit.edit(&environment.config)?
+                    if expenses.group_expenses.is_empty() {
+                        println!("No {} to edit.", GroupExpense::plural_name());
+                        false
+                    } else {
+                        let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
+                        let to_edit =
+                            Select::new("Which group expense do you want to edit?", options)
+                                .prompt()?;
+                        to_edit.edit(&environment.config)?
+                    }
                 }
                 ExpenseType::Recurring => todo!("Edit recurring expenses"),
                 ExpenseType::Todo => {
-                    let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
-                    let to_edit =
-                        Select::new("Which debt do you want to edit?", options).prompt()?;
-                    println!("{}", to_edit);
-                    let payed_up = Confirm::new(&format!(
-                        "Have you paid {} back the {}{}?",
-                        to_edit.person, to_edit.expense.amount, environment.config.currency
-                    ))
-                    .prompt()?;
-                    if payed_up {
-                        let index = expenses
-                            .debts_owed
-                            .iter()
-                            .position(|debt| debt == to_edit)
-                            .expect("The debt we edit must exist");
-                        let debt_paid = expenses.debts_owed.remove(index);
-                        expenses.single_expenses.push(debt_paid.expense);
+                    if expenses.debts_owed.is_empty() {
+                        println!("No {} to edit.", Debt::plural_name());
+                        false
+                    } else {
+                        let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
+                        let to_edit =
+                            Select::new("Which debt do you want to edit?", options).prompt()?;
+                        println!("{}", to_edit);
+                        let payed_up = Confirm::new(&format!(
+                            "Have you paid {} back the {}{}?",
+                            to_edit.person, to_edit.expense.amount, environment.config.currency
+                        ))
+                        .prompt()?;
+                        if payed_up {
+                            let index = expenses
+                                .debts_owed
+                                .iter()
+                                .position(|debt| debt == to_edit)
+                                .expect("The debt we edit must exist");
+                            let debt_paid = expenses.debts_owed.remove(index);
+                            expenses.single_expenses.push(debt_paid.expense);
+                        }
+                        payed_up
                     }
-                    payed_up
                 }
                 ExpenseType::Advance => {
-                    let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
-                    let to_edit =
-                        Select::new("Which debt do you want to edit?", options).prompt()?;
-                    println!("{}", to_edit);
-                    let payed_up = Confirm::new(&format!(
-                        "Has {} paid you back the {}{}?",
-                        to_edit.person, to_edit.amount, environment.config.currency
-                    ))
-                    .prompt()?;
-                    if payed_up {
-                        let index = expenses
-                            .unpaid_advancements
-                            .iter()
-                            .position(|advancement| advancement == to_edit)
-                            .expect("The advancement we edit must exist");
-                        expenses.unpaid_advancements.remove(index);
+                    if expenses.unpaid_advancements.is_empty() {
+                        println!("No {} to edit.", Advancement::plural_name());
+                        false
+                    } else {
+                        let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
+                        let to_edit =
+                            Select::new("Which debt do you want to edit?", options).prompt()?;
+                        println!("{}", to_edit);
+                        let payed_up = Confirm::new(&format!(
+                            "Has {} paid you back the {}{}?",
+                            to_edit.person, to_edit.amount, environment.config.currency
+                        ))
+                        .prompt()?;
+                        if payed_up {
+                            let index = expenses
+                                .unpaid_advancements
+                                .iter()
+                                .position(|advancement| advancement == to_edit)
+                                .expect("The advancement we edit must exist");
+                            expenses.unpaid_advancements.remove(index);
+                        }
+                        payed_up
                     }
-                    payed_up
                 }
             }
         }
