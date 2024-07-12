@@ -38,6 +38,9 @@ pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal>
 const NEW_PERSON: &str = "Add new Person";
 
 pub fn person(prompt: &str, people: &BTreeSet<String>) -> InquireResult<String> {
+    if people.is_empty() {
+        return Text::new(prompt).prompt();
+    }
     let options_vec: Vec<_> = once(NEW_PERSON)
         .chain(people.iter().map(String::as_str))
         .collect();

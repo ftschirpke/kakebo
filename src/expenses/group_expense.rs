@@ -4,7 +4,10 @@ use inquire::{Confirm, InquireError, Select};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{errors::KakeboError, Environment, KakeboConfig, ANSI_GREEN, ANSI_RED, ANSI_STOP};
+use crate::{
+    errors::KakeboError, DisplayableExpense, Environment, KakeboConfig, ANSI_GREEN, ANSI_RED,
+    ANSI_STOP,
+};
 
 use super::{money_amount, person, ExpenseInfo, NEW_PERSON};
 
@@ -22,6 +25,20 @@ pub struct GroupExpense {
 impl Display for GroupExpense {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} (Total: {:8.2})", self.info, self.total_amount)
+    }
+}
+
+impl DisplayableExpense for GroupExpense {
+    fn name() -> &'static str {
+        "group expense"
+    }
+
+    fn plural_name() -> &'static str {
+        "group expenses"
+    }
+
+    fn configured_display(&self, config: &KakeboConfig) {
+        self.print(config)
     }
 }
 
@@ -156,7 +173,7 @@ impl GroupExpense {
             return Ok(false);
         }
         let mut changes_made = false;
-        loop {
+        while !need_to_pay.is_empty() {
             let options: Vec<String> = need_to_pay.keys().map(|&name| name.clone()).collect();
             let person_that_paid = Select::new("Who already payed?", options).prompt();
             if let Err(InquireError::OperationCanceled) = person_that_paid {
@@ -172,5 +189,6 @@ impl GroupExpense {
             self.paid_amounts[index] = Some(paid_amount);
             changes_made = true;
         }
+        Ok(changes_made)
     }
 }

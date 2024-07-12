@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::errors::KakeboError;
+use crate::DisplayableExpense;
 use crate::KakeboConfig;
 
 use super::money_amount;
@@ -38,6 +39,16 @@ impl Display for RecurringExpense {
             "{} ({:8.2} every {} {})",
             self.info, self.amount, self.every, end
         )
+    }
+}
+
+impl DisplayableExpense for RecurringExpense {
+    fn name() -> &'static str {
+        "recurring expense"
+    }
+
+    fn plural_name() -> &'static str {
+        "recurring expenses"
     }
 }
 

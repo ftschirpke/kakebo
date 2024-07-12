@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeSet, HashMap},
+    fmt::Display,
     fs::File,
     path::{Path, PathBuf},
     process::ExitCode,
@@ -302,6 +303,57 @@ pub const ANSI_RED: &str = "\x1b[31m";
 pub const ANSI_GREEN: &str = "\x1b[32m";
 pub const ANSI_STOP: &str = "\x1b[0m";
 
+trait DisplayableExpense: Display + Eq {
+    fn name() -> &'static str;
+    fn plural_name() -> &'static str;
+    fn configured_display(&self, _config: &KakeboConfig) {
+        println!("{}", self)
+    }
+}
+
+fn status<T: DisplayableExpense>(expenses: &[T], config: &KakeboConfig) -> Result<(), KakeboError> {
+    if expenses.is_empty() {
+        println!("No {} to view.", T::plural_name());
+        return Ok(());
+    }
+    let options: Vec<_> = expenses.iter().rev().collect();
+    let to_view = Select::new(
+        format!("Which {} do you want to view?", T::name()).as_str(),
+        options,
+    )
+    .prompt()?;
+    to_view.configured_display(config);
+    Ok(())
+}
+
+fn delete<T: DisplayableExpense>(
+    expenses: &mut Vec<T>,
+    config: &KakeboConfig,
+) -> Result<bool, KakeboError> {
+    if expenses.is_empty() {
+        println!("No {} to delete.", T::plural_name());
+        return Ok(false);
+    }
+    let options: Vec<_> = expenses.iter().rev().collect();
+    let to_delete = Select::new(
+        format!("Which {} do you want to delete?", T::name()).as_str(),
+        options,
+    )
+    .prompt()?;
+    to_delete.configured_display(config);
+    let idx = expenses
+        .iter()
+        .position(|adv| adv == to_delete)
+        .unwrap_or_else(|| panic!("Selected {} must exist.", T::name()));
+    let deletion_confirmed =
+        Confirm::new(format!("Are you sure you want to delete this {}?", T::name()).as_str())
+            .prompt()?;
+    if deletion_confirmed {
+        expenses.remove(idx);
+    }
+    Ok(deletion_confirmed)
+}
+
 fn run() -> Result<(), KakeboError> {
     let args = Args::parse();
     let config = parse_config()?;
@@ -341,131 +393,27 @@ fn run() -> Result<(), KakeboError> {
                     }
                 }
                 Some(ExpenseType::Single) => {
-                    let options: Vec<_> = expenses.single_expenses.iter().rev().collect();
-                    let to_view = Select::new("Which single expense do you want to view?", options)
-                        .prompt()?;
-                    println!("{}", to_view);
+                    status(&expenses.single_expenses, &environment.config)?
                 }
-                Some(ExpenseType::Group) => {
-                    let options: Vec<_> = expenses.group_expenses.iter().rev().collect();
-                    let to_view = Select::new("Which group expense do you want to view?", options)
-                        .prompt()?;
-                    to_view.print(&environment.config);
-                }
+                Some(ExpenseType::Group) => status(&expenses.group_expenses, &environment.config)?,
                 Some(ExpenseType::Recurring) => {
-                    let options: Vec<_> = expenses.recurring_expenses.iter().rev().collect();
-                    let to_view =
-                        Select::new("Which recurring expense do you want to view?", options)
-                            .prompt()?;
-                    println!("{}", to_view);
+                    status(&expenses.recurring_expenses, &environment.config)?
                 }
-                Some(ExpenseType::Todo) => {
-                    let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
-                    let to_view =
-                        Select::new("Which open debt do you want to view?", options).prompt()?;
-                    println!("{}", to_view);
-                }
+                Some(ExpenseType::Todo) => status(&expenses.debts_owed, &environment.config)?,
                 Some(ExpenseType::Advance) => {
-                    let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
-                    let to_view =
-                        Select::new("Which unpaid advancement do you want to view?", options)
-                            .prompt()?;
-                    println!("{}", to_view);
+                    status(&expenses.unpaid_advancements, &environment.config)?
                 }
             }
             false
         }
         Command::Delete { expense_type } => match expense_type {
-            ExpenseType::Single => {
-                let options: Vec<_> = expenses.single_expenses.iter().rev().collect();
-                let to_delete =
-                    Select::new("Which single expense do you want to delete?", options).prompt()?;
-                println!("{}", to_delete);
-                let idx = expenses
-                    .single_expenses
-                    .iter()
-                    .position(|adv| adv == to_delete)
-                    .expect("Selected single expense must exist.");
-                let deletion_confirmed =
-                    Confirm::new("Are you sure you want to delete this single expense?")
-                        .prompt()?;
-                if deletion_confirmed {
-                    expenses.single_expenses.remove(idx);
-                }
-                deletion_confirmed
-            }
-            ExpenseType::Group => {
-                let options: Vec<_> = expenses.group_expenses.iter().rev().collect();
-                let to_delete =
-                    Select::new("Which group expense do you want to delete?", options).prompt()?;
-                to_delete.print(&environment.config);
-                let idx = expenses
-                    .group_expenses
-                    .iter()
-                    .position(|adv| adv == to_delete)
-                    .expect("Selected group expense must exist.");
-                let deletion_confirmed =
-                    Confirm::new("Are you sure you want to delete this group expense?").prompt()?;
-                if deletion_confirmed {
-                    expenses.group_expenses.remove(idx);
-                }
-                deletion_confirmed
-            }
+            ExpenseType::Single => delete(&mut expenses.single_expenses, &environment.config)?,
+            ExpenseType::Group => delete(&mut expenses.group_expenses, &environment.config)?,
             ExpenseType::Recurring => {
-                let options: Vec<_> = expenses.recurring_expenses.iter().rev().collect();
-                let to_delete =
-                    Select::new("Which recurring expense do you want to delete?", options)
-                        .prompt()?;
-                println!("{}", to_delete);
-                let idx = expenses
-                    .recurring_expenses
-                    .iter()
-                    .position(|adv| adv == to_delete)
-                    .expect("Selected recurring expense must exist.");
-                let deletion_confirmed =
-                    Confirm::new("Are you sure you want to delete this recurring expense?")
-                        .prompt()?;
-                if deletion_confirmed {
-                    expenses.recurring_expenses.remove(idx);
-                }
-                deletion_confirmed
+                delete(&mut expenses.recurring_expenses, &environment.config)?
             }
-            ExpenseType::Todo => {
-                let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
-                let to_delete =
-                    Select::new("Which open debt do you want to delete?", options).prompt()?;
-                println!("{}", to_delete);
-                let idx = expenses
-                    .debts_owed
-                    .iter()
-                    .position(|adv| adv == to_delete)
-                    .expect("Selected debt must exist.");
-                let deletion_confirmed =
-                    Confirm::new("Are you sure you want to delete this debt?").prompt()?;
-                if deletion_confirmed {
-                    expenses.debts_owed.remove(idx);
-                }
-                deletion_confirmed
-            }
-            ExpenseType::Advance => {
-                let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
-                let to_delete =
-                    Select::new("Which unpaid advancement do you want to delete?", options)
-                        .prompt()?;
-                println!("{}", to_delete);
-                let idx = expenses
-                    .unpaid_advancements
-                    .iter()
-                    .position(|adv| adv == to_delete)
-                    .expect("Selected advancement must exist.");
-                let deletion_confirmed =
-                    Confirm::new("Are you sure you want to delete this unpaid advancement?")
-                        .prompt()?;
-                if deletion_confirmed {
-                    expenses.unpaid_advancements.remove(idx);
-                }
-                deletion_confirmed
-            }
+            ExpenseType::Todo => delete(&mut expenses.debts_owed, &environment.config)?,
+            ExpenseType::Advance => delete(&mut expenses.unpaid_advancements, &environment.config)?,
         },
         Command::Add { expense_type } => {
             match expense_type {
@@ -517,52 +465,68 @@ fn run() -> Result<(), KakeboError> {
             match expense_type {
                 ExpenseType::Single => todo!("Edit single expenses"),
                 ExpenseType::Group => {
-                    let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
-                    let to_edit = Select::new("Which group expense do you want to edit?", options)
-                        .prompt()?;
-                    to_edit.edit(&environment.config)?
+                    if expenses.group_expenses.is_empty() {
+                        println!("No {} to edit.", GroupExpense::plural_name());
+                        false
+                    } else {
+                        let options: Vec<_> = expenses.group_expenses.iter_mut().rev().collect();
+                        let to_edit =
+                            Select::new("Which group expense do you want to edit?", options)
+                                .prompt()?;
+                        to_edit.edit(&environment.config)?
+                    }
                 }
                 ExpenseType::Recurring => todo!("Edit recurring expenses"),
                 ExpenseType::Todo => {
-                    let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
-                    let to_edit =
-                        Select::new("Which debt do you want to edit?", options).prompt()?;
-                    println!("{}", to_edit);
-                    let payed_up = Confirm::new(&format!(
-                        "Have you paid {} back the {}{}?",
-                        to_edit.person, to_edit.expense.amount, environment.config.currency
-                    ))
-                    .prompt()?;
-                    if payed_up {
-                        let index = expenses
-                            .debts_owed
-                            .iter()
-                            .position(|debt| debt == to_edit)
-                            .expect("The debt we edit must exist");
-                        let debt_paid = expenses.debts_owed.remove(index);
-                        expenses.single_expenses.push(debt_paid.expense);
+                    if expenses.debts_owed.is_empty() {
+                        println!("No {} to edit.", Debt::plural_name());
+                        false
+                    } else {
+                        let options: Vec<_> = expenses.debts_owed.iter().rev().collect();
+                        let to_edit =
+                            Select::new("Which debt do you want to edit?", options).prompt()?;
+                        println!("{}", to_edit);
+                        let payed_up = Confirm::new(&format!(
+                            "Have you paid {} back the {}{}?",
+                            to_edit.person, to_edit.expense.amount, environment.config.currency
+                        ))
+                        .prompt()?;
+                        if payed_up {
+                            let index = expenses
+                                .debts_owed
+                                .iter()
+                                .position(|debt| debt == to_edit)
+                                .expect("The debt we edit must exist");
+                            let debt_paid = expenses.debts_owed.remove(index);
+                            expenses.single_expenses.push(debt_paid.expense);
+                        }
+                        payed_up
                     }
-                    payed_up
                 }
                 ExpenseType::Advance => {
-                    let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
-                    let to_edit =
-                        Select::new("Which debt do you want to edit?", options).prompt()?;
-                    println!("{}", to_edit);
-                    let payed_up = Confirm::new(&format!(
-                        "Has {} paid you back the {}{}?",
-                        to_edit.person, to_edit.amount, environment.config.currency
-                    ))
-                    .prompt()?;
-                    if payed_up {
-                        let index = expenses
-                            .unpaid_advancements
-                            .iter()
-                            .position(|advancement| advancement == to_edit)
-                            .expect("The advancement we edit must exist");
-                        expenses.unpaid_advancements.remove(index);
+                    if expenses.unpaid_advancements.is_empty() {
+                        println!("No {} to edit.", Advancement::plural_name());
+                        false
+                    } else {
+                        let options: Vec<_> = expenses.unpaid_advancements.iter().rev().collect();
+                        let to_edit =
+                            Select::new("Which debt do you want to edit?", options).prompt()?;
+                        println!("{}", to_edit);
+                        let payed_up = Confirm::new(&format!(
+                            "Has {} paid you back the {}{}?",
+                            to_edit.person, to_edit.amount, environment.config.currency
+                        ))
+                        .prompt()?;
+                        if payed_up {
+                            let index = expenses
+                                .unpaid_advancements
+                                .iter()
+                                .position(|advancement| advancement == to_edit)
+                                .expect("The advancement we edit must exist");
+                            expenses.unpaid_advancements.remove(index);
+                        }
+                        payed_up
                     }
-                    payed_up
                 }
             }
         }
