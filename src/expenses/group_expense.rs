@@ -135,15 +135,18 @@ impl GroupExpense {
             paid_amounts[index] = Some(paid_amount);
         }
 
+        let new_instance = Self {
+            info,
+            raw_user_amount,
+            people,
+            raw_amounts,
+            total_amount,
+            paid_amounts,
+        };
+        new_instance.configured_display(&environment.config);
+
         if Confirm::new("Save this expense?").prompt()? {
-            Ok(Self {
-                info,
-                raw_user_amount,
-                people,
-                raw_amounts,
-                total_amount,
-                paid_amounts,
-            })
+            Ok(new_instance)
         } else {
             Err(KakeboError::ExpenseCreationAborted)
         }

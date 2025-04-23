@@ -165,13 +165,16 @@ impl RecurringExpense {
             None
         };
 
+        let new_instance = Self {
+            info,
+            amount,
+            every,
+            end_date,
+        };
+        new_instance.configured_display(config);
+
         if Confirm::new("Save this expense?").prompt()? {
-            Ok(Self {
-                info,
-                amount,
-                every,
-                end_date,
-            })
+            Ok(new_instance)
         } else {
             Err(KakeboError::ExpenseCreationAborted)
         }

@@ -52,12 +52,16 @@ impl Advancement {
         let description = Text::new("Description:").prompt()?;
         let description = (!description.is_empty()).then_some(description);
         let amount = money_amount(&environment.config, &person)?;
-        Ok(Self {
+
+        let new_instance = Self {
             person,
             amount,
             creation_date,
             date,
             description,
-        })
+        };
+        new_instance.configured_display(&environment.config);
+
+        Ok(new_instance)
     }
 }

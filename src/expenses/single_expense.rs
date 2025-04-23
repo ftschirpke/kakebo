@@ -38,8 +38,12 @@ impl SingleExpense {
     pub fn new(config: &KakeboConfig) -> Result<Self, KakeboError> {
         let info = ExpenseInfo::new()?;
         let amount = money_amount(config, &config.user_name)?;
+
+        let new_instance = Self { info, amount };
+        new_instance.configured_display(config);
+
         if Confirm::new("Save this expense?").prompt()? {
-            Ok(Self { info, amount })
+            Ok(new_instance)
         } else {
             Err(KakeboError::ExpenseCreationAborted)
         }
