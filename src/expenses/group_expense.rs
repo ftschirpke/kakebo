@@ -84,12 +84,9 @@ impl GroupExpense {
         }
     }
 
-    pub fn new(environment: &Environment) -> Result<Self, KakeboError> {
+    pub fn new(environment: &Environment, config: &KakeboConfig) -> Result<Self, KakeboError> {
         let info = ExpenseInfo::new()?;
-        let raw_user_amount = money_amount(
-            &environment.config,
-            &format!("{} (raw)", &environment.config.user_name),
-        )?;
+        let raw_user_amount = money_amount(config, &format!("{} (raw)", &config.user_name))?;
         let mut people = Vec::new();
         let mut raw_amounts = Vec::new();
 
@@ -104,13 +101,12 @@ impl GroupExpense {
             if person_name == NEW_PERSON {
                 continue;
             }
-            let person_amount =
-                money_amount(&environment.config, &format!("{} (raw)", person_name))?;
+            let person_amount = money_amount(config, &format!("{} (raw)", person_name))?;
             people_still_possible.remove(&person_name);
             people.push(person_name);
             raw_amounts.push(person_amount);
         }
-        let total_amount = money_amount(&environment.config, "total")?;
+        let total_amount = money_amount(config, "total")?;
 
         let mut paid_amounts = vec![None; people.len()];
         let mut need_to_pay: HashMap<String, usize> = people
@@ -126,8 +122,7 @@ impl GroupExpense {
                 break;
             }
             let person_that_paid = person_that_paid?;
-            let paid_amount =
-                money_amount(&environment.config, &format!("{} (paid)", person_that_paid))?;
+            let paid_amount = money_amount(config, &format!("{} (paid)", person_that_paid))?;
             let index = need_to_pay
                 .remove_entry(&person_that_paid)
                 .ok_or_else(|| KakeboError::InvalidArgument(person_that_paid.clone()))?
@@ -143,7 +138,7 @@ impl GroupExpense {
             total_amount,
             paid_amounts,
         };
-        new_instance.configured_display(&environment.config);
+        new_instance.configured_display(config);
 
         if Confirm::new("Save this expense?").prompt()? {
             Ok(new_instance)

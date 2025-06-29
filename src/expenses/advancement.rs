@@ -5,7 +5,7 @@ use inquire::{DateSelect, Text};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{errors::KakeboError, DisplayableExpense, Environment};
+use crate::{errors::KakeboError, DisplayableExpense, Environment, KakeboConfig};
 
 use super::{money_amount, person};
 
@@ -43,7 +43,7 @@ impl DisplayableExpense for Advancement {
 }
 
 impl Advancement {
-    pub fn new(environment: &Environment) -> Result<Self, KakeboError> {
+    pub fn new(environment: &Environment, config: &KakeboConfig) -> Result<Self, KakeboError> {
         let creation_date = Local::now().date_naive();
         let person = person("Who owes you this money?", &environment.people)?;
         let date = DateSelect::new("Date:")
@@ -51,7 +51,7 @@ impl Advancement {
             .prompt()?;
         let description = Text::new("Description:").prompt()?;
         let description = (!description.is_empty()).then_some(description);
-        let amount = money_amount(&environment.config, &person)?;
+        let amount = money_amount(config, &person)?;
 
         let new_instance = Self {
             person,
@@ -60,7 +60,7 @@ impl Advancement {
             date,
             description,
         };
-        new_instance.configured_display(&environment.config);
+        new_instance.configured_display(config);
 
         Ok(new_instance)
     }

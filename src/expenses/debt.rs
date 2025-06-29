@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::errors::KakeboError;
 use crate::DisplayableExpense;
 use crate::Environment;
+use crate::KakeboConfig;
 
 use super::person;
 use super::single_expense::SingleExpense;
@@ -37,12 +38,12 @@ impl DisplayableExpense for Debt {
 }
 
 impl Debt {
-    pub fn new(environment: &Environment) -> Result<Self, KakeboError> {
+    pub fn new(environment: &Environment, config: &KakeboConfig) -> Result<Self, KakeboError> {
         let person = person("Who do you owe this money to?", &environment.people)?;
-        let expense = SingleExpense::new(&environment.config)?;
+        let expense = SingleExpense::new(config)?;
 
         let new_instance = Self { expense, person };
-        new_instance.configured_display(&environment.config);
+        new_instance.configured_display(config);
 
         Ok(new_instance)
     }

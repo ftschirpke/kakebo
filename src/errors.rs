@@ -22,6 +22,8 @@ pub enum KakeboError {
     TomlDeserialization(#[from] toml::de::Error),
     #[error("Inquire error: {0}")]
     Inquire(#[from] inquire::error::InquireError),
+    #[error("Walkdir error: {0}")]
+    Walkdir(#[from] walkdir::Error),
     #[error("Expense creation aborted")]
     ExpenseCreationAborted,
 }
