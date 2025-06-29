@@ -35,6 +35,23 @@ pub struct KakeboConfig {
     pub database_dir: PathBuf,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DatabaseConfig {
+    pub currency: char,
+    pub decimal_sep: char,
+    pub user_name: String,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            currency: '€',
+            decimal_sep: '.',
+            user_name: "Friedrich".to_string(),
+        }
+    }
+}
+
 fn parse_config() -> Result<KakeboConfig, KakeboError> {
     let cur_dir = std::env::current_dir()?;
     let config_path = cur_dir.join("kakebo.config");
@@ -107,6 +124,7 @@ enum IncomeType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Expenses {
+    config: DatabaseConfig,
     single_expenses: Vec<SingleExpense>,
     group_expenses: Vec<GroupExpense>,
     recurring_expenses: Vec<RecurringExpense>,
@@ -115,8 +133,9 @@ struct Expenses {
 }
 
 impl Expenses {
-    pub fn new() -> Self {
+    pub fn new(config: DatabaseConfig) -> Self {
         Self {
+            config,
             single_expenses: Vec::new(),
             group_expenses: Vec::new(),
             recurring_expenses: Vec::new(),
@@ -235,7 +254,7 @@ impl Expenses {
 
 impl Default for Expenses {
     fn default() -> Self {
-        Self::new()
+        Self::new(DatabaseConfig::default())
     }
 }
 
