@@ -11,50 +11,36 @@ use age::{secrecy::Secret, Decryptor, Encryptor};
 use chrono::Local;
 use chronoutil::RelativeDuration;
 use clap::{Parser, Subcommand};
-use expenses::{
-    advancement::Advancement, debt::Debt, group_expense::GroupExpense,
-    recurring_expense::RecurringExpense, single_expense::SingleExpense,
-};
 use inquire::{Confirm, Password, Select};
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use walkdir::WalkDir;
 
 use self::errors::KakeboError;
+use expenses::{
+    advancement::Advancement, debt::Debt, group_expense::GroupExpense,
+    recurring_expense::RecurringExpense, single_expense::SingleExpense,
+};
 
 mod errors;
 mod expenses;
 
-const KAKEBO_DB_FILE: &str = "test.kakebo";
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KakeboConfig {
     pub currency: char,
     pub decimal_sep: char,
     pub user_name: String,
-    pub database_dir: PathBuf,
 }
 
-fn parse_config() -> Result<KakeboConfig, KakeboError> {
-    let cur_dir = std::env::current_dir()?;
-    let config_path = cur_dir.join("kakebo.config");
-
-    if !config_path.exists() {
-        println!("No config file found at {}", config_path.display());
-        println!(
-            "Please create a config file. A minimal config would look like this:
-user_name = \"Your name\"
-currency = \"$\"
-decimal_sep = \".\"
-database_dir = \"/home/<username>/<path>/<to>/<dir>\""
-        );
-        return Err(KakeboError::InvalidArgument("No config file found".into()));
+impl Default for KakeboConfig {
+    fn default() -> Self {
+        Self {
+            currency: '€',
+            decimal_sep: '.',
+            user_name: "Friedrich".to_string(),
+        }
     }
-
-    println!("Config file found at {}", config_path.display());
-    let config = std::fs::read_to_string(config_path)?;
-    let config: KakeboConfig = toml::from_str(&config)?;
-    Ok(config)
 }
 
 #[derive(Parser, Debug)]
@@ -107,6 +93,7 @@ enum IncomeType {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Expenses {
+    config: KakeboConfig,
     single_expenses: Vec<SingleExpense>,
     group_expenses: Vec<GroupExpense>,
     recurring_expenses: Vec<RecurringExpense>,
@@ -115,8 +102,9 @@ struct Expenses {
 }
 
 impl Expenses {
-    pub fn new() -> Self {
+    pub fn new(config: KakeboConfig) -> Self {
         Self {
+            config,
             single_expenses: Vec::new(),
             group_expenses: Vec::new(),
             recurring_expenses: Vec::new(),
@@ -235,13 +223,12 @@ impl Expenses {
 
 impl Default for Expenses {
     fn default() -> Self {
-        Self::new()
+        Self::new(KakeboConfig::default())
     }
 }
 
 #[derive(Debug)]
 pub struct Environment {
-    pub config: KakeboConfig,
     pub people: BTreeSet<String>,
 }
 
@@ -354,15 +341,57 @@ fn delete<T: DisplayableExpense>(
     Ok(deletion_confirmed)
 }
 
+struct DisplayPath {
+    inner: PathBuf,
+}
+
+impl Display for DisplayPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(inner_str) = self.inner.to_str() {
+            write!(f, "{}", inner_str)
+        } else {
+            write!(f, "Could not resolve path")
+        }
+    }
+}
+
 fn run() -> Result<(), KakeboError> {
     let args = Args::parse();
-    let config = parse_config()?;
 
-    let path = config.database_dir.join(KAKEBO_DB_FILE);
+    let search_dir = dirs::home_dir().expect("Resolve home directory");
+    let mut possible_paths = Vec::new();
 
-    let mut expenses: Expenses = parse_file(&path)?;
+    for entry in WalkDir::new(search_dir)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let filename = entry.file_name().to_string_lossy();
+
+        if filename.ends_with(".kakebo") {
+            possible_paths.push(DisplayPath {
+                inner: entry.path().to_owned(),
+            });
+        }
+    }
+
+    let path = match possible_paths.len() {
+        0 => {
+            return Err(KakeboError::InvalidArgument(
+                "Could not find any database".to_string(),
+            ))
+        }
+        1 => possible_paths.pop().unwrap(),
+        _ => Select::new(
+            "Which Kakebo database do you want to access?",
+            possible_paths,
+        )
+        .prompt()?,
+    };
+    let path = Path::new(&path.inner);
+
+    let mut expenses: Expenses = parse_file(path)?;
     let mut environment = Environment {
-        config,
         people: expenses
             .group_expenses
             .iter()
@@ -385,47 +414,43 @@ fn run() -> Result<(), KakeboError> {
             match expense_type {
                 None => {
                     println!("===== STATUS =====");
-                    println!("User: {}", environment.config.user_name);
-                    println!("Currency: {}", environment.config.currency);
+                    println!("User: {}", expenses.config.user_name);
+                    println!("Currency: {}", expenses.config.currency);
                     expenses.print_status();
                     if args.debug {
                         println!("{:?}", expenses);
                     }
                 }
-                Some(ExpenseType::Single) => {
-                    status(&expenses.single_expenses, &environment.config)?
-                }
-                Some(ExpenseType::Group) => status(&expenses.group_expenses, &environment.config)?,
+                Some(ExpenseType::Single) => status(&expenses.single_expenses, &expenses.config)?,
+                Some(ExpenseType::Group) => status(&expenses.group_expenses, &expenses.config)?,
                 Some(ExpenseType::Recurring) => {
-                    status(&expenses.recurring_expenses, &environment.config)?
+                    status(&expenses.recurring_expenses, &expenses.config)?
                 }
-                Some(ExpenseType::Todo) => status(&expenses.debts_owed, &environment.config)?,
+                Some(ExpenseType::Todo) => status(&expenses.debts_owed, &expenses.config)?,
                 Some(ExpenseType::Advance) => {
-                    status(&expenses.unpaid_advancements, &environment.config)?
+                    status(&expenses.unpaid_advancements, &expenses.config)?
                 }
             }
             false
         }
         Command::Delete { expense_type } => match expense_type {
-            ExpenseType::Single => delete(&mut expenses.single_expenses, &environment.config)?,
-            ExpenseType::Group => delete(&mut expenses.group_expenses, &environment.config)?,
-            ExpenseType::Recurring => {
-                delete(&mut expenses.recurring_expenses, &environment.config)?
-            }
-            ExpenseType::Todo => delete(&mut expenses.debts_owed, &environment.config)?,
-            ExpenseType::Advance => delete(&mut expenses.unpaid_advancements, &environment.config)?,
+            ExpenseType::Single => delete(&mut expenses.single_expenses, &expenses.config)?,
+            ExpenseType::Group => delete(&mut expenses.group_expenses, &expenses.config)?,
+            ExpenseType::Recurring => delete(&mut expenses.recurring_expenses, &expenses.config)?,
+            ExpenseType::Todo => delete(&mut expenses.debts_owed, &expenses.config)?,
+            ExpenseType::Advance => delete(&mut expenses.unpaid_advancements, &expenses.config)?,
         },
         Command::Add { expense_type } => {
             match expense_type {
                 ExpenseType::Single => {
-                    let single = SingleExpense::new(&environment.config)?;
+                    let single = SingleExpense::new(&expenses.config)?;
                     if args.debug {
                         println!("{:?}", single);
                     }
                     expenses.single_expenses.push(single);
                 }
                 ExpenseType::Group => {
-                    let group = GroupExpense::new(&environment)?;
+                    let group = GroupExpense::new(&environment, &expenses.config)?;
                     if args.debug {
                         println!("{:?}", group);
                     }
@@ -435,14 +460,14 @@ fn run() -> Result<(), KakeboError> {
                     expenses.group_expenses.push(group);
                 }
                 ExpenseType::Recurring => {
-                    let recurring = RecurringExpense::new(&environment.config)?;
+                    let recurring = RecurringExpense::new(&expenses.config)?;
                     if args.debug {
                         println!("{:?}", recurring);
                     }
                     expenses.recurring_expenses.push(recurring);
                 }
                 ExpenseType::Todo => {
-                    let debt = Debt::new(&environment)?;
+                    let debt = Debt::new(&environment, &expenses.config)?;
                     if args.debug {
                         println!("{:?}", debt);
                     }
@@ -450,7 +475,7 @@ fn run() -> Result<(), KakeboError> {
                     expenses.debts_owed.push(debt);
                 }
                 ExpenseType::Advance => {
-                    let advancement = Advancement::new(&environment)?;
+                    let advancement = Advancement::new(&environment, &expenses.config)?;
                     if args.debug {
                         println!("{:?}", advancement);
                     }
@@ -473,7 +498,7 @@ fn run() -> Result<(), KakeboError> {
                         let to_edit =
                             Select::new("Which group expense do you want to edit?", options)
                                 .prompt()?;
-                        to_edit.edit(&environment.config)?
+                        to_edit.edit(&expenses.config)?
                     }
                 }
                 ExpenseType::Recurring => todo!("Edit recurring expenses"),
@@ -488,7 +513,7 @@ fn run() -> Result<(), KakeboError> {
                         println!("{}", to_edit);
                         let payed_up = Confirm::new(&format!(
                             "Have you paid {} back the {}{}?",
-                            to_edit.person, to_edit.expense.amount, environment.config.currency
+                            to_edit.person, to_edit.expense.amount, expenses.config.currency
                         ))
                         .prompt()?;
                         if payed_up {
@@ -514,7 +539,7 @@ fn run() -> Result<(), KakeboError> {
                         println!("{}", to_edit);
                         let payed_up = Confirm::new(&format!(
                             "Has {} paid you back the {}{}?",
-                            to_edit.person, to_edit.amount, environment.config.currency
+                            to_edit.person, to_edit.amount, expenses.config.currency
                         ))
                         .prompt()?;
                         if payed_up {
@@ -550,7 +575,7 @@ fn run() -> Result<(), KakeboError> {
         );
     }
 
-    write_file(&path, &expenses)
+    write_file(path, &expenses)
 }
 
 fn main() -> ExitCode {
