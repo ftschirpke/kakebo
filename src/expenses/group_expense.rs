@@ -24,11 +24,11 @@ impl Display for GroupExpensePart {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} - {} {:8.2} (paid: {:8.2})",
-            self.info,
+            "{} {:8.2} (paid: {:8.2}) - {}",
             self.person,
             self.to_pay,
-            self.paid.unwrap_or(Decimal::ZERO)
+            self.paid.unwrap_or(Decimal::ZERO),
+            self.info,
         )
     }
 }

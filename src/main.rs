@@ -58,6 +58,9 @@ enum Command {
         #[command(subcommand)]
         expense_type: Option<ExpenseType>,
     },
+    Pstatus {
+        person: String,
+    },
     Add {
         #[command(subcommand)]
         expense_type: ExpenseType,
@@ -425,6 +428,50 @@ fn run() -> Result<(), KakeboError> {
             }
             false
         }
+        Command::Pstatus { person } => {
+            if expenses.all_people().all(|p| p != person) {
+                return Err(KakeboError::InvalidArgument(format!(
+                    "{} is not a known person",
+                    person
+                )));
+            }
+            let debts_from_group_expenses =
+                expenses.group_expenses.iter().flat_map(|group_expense| {
+                    group_expense.parts().filter(|part| {
+                        part.person == person && part.to_pay != part.paid.unwrap_or(Decimal::ZERO)
+                    })
+                });
+
+            let mut total_owed = Decimal::ZERO;
+            let mut total_overflow = Decimal::ZERO;
+
+            for part in debts_from_group_expenses {
+                println!("  {}", part);
+                let paid = part.paid.unwrap_or(Decimal::ZERO);
+                match paid.cmp(&part.to_pay) {
+                    Ordering::Less => {
+                        let owed = part.to_pay - paid;
+                        total_owed += owed;
+                    }
+                    Ordering::Greater => {
+                        let overpaid = paid - part.to_pay;
+                        total_overflow += overpaid
+                    }
+                    Ordering::Equal => {}
+                }
+            }
+            // TODO: debts owed and advancements
+            let overflow = expenses.overflows.get(&person).unwrap_or(&Decimal::ZERO);
+            total_overflow += overflow;
+            println!("  {} overflow: {:8.2}", person, overflow);
+            println!("             they owe   you owe          balance");
+            println!(
+                "  {:10} {ANSI_RED}{:8.2}{ANSI_STOP}, {ANSI_GREEN}{:8.2}{ANSI_STOP}, TOTAL: {:+8.2}",
+                person, total_owed, total_overflow, total_owed - total_overflow
+            );
+
+            false
+        }
         Command::Delete { expense_type } => match expense_type {
             ExpenseType::Single => delete(&mut expenses.single_expenses, &expenses.config)?,
             ExpenseType::Group => delete(&mut expenses.group_expenses, &expenses.config)?,
@@ -578,7 +625,6 @@ fn run() -> Result<(), KakeboError> {
                 let options: Vec<_> = expenses
                     .group_expenses
                     .iter_mut()
-                    .rev()
                     .flat_map(|group_expense| {
                         group_expense.parts().filter(|part| {
                             part.person == source_person
