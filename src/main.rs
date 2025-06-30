@@ -638,6 +638,9 @@ fn run() -> Result<(), KakeboError> {
                     overflow,
                     this_value + overflow
                 );
+                if options.is_empty() {
+                    break;
+                }
                 let pay_off_option =
                     Select::new("Which group expense did this pay?", options).prompt();
                 if let Err(inquire::InquireError::OperationCanceled) = pay_off_option {
