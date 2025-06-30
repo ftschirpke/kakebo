@@ -74,6 +74,7 @@ enum Command {
         value: Decimal,
         from: Option<String>,
     },
+    Sanitize,
 }
 
 #[derive(Subcommand, Debug)]
@@ -91,7 +92,7 @@ enum IncomeType {
     Recurring,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Expenses {
     config: KakeboConfig,
     single_expenses: Vec<SingleExpense>,
@@ -99,18 +100,18 @@ struct Expenses {
     recurring_expenses: Vec<RecurringExpense>,
     debts_owed: Vec<Debt>,
     unpaid_advancements: Vec<Advancement>,
+    overflows: HashMap<String, Decimal>,
 }
 
 impl Expenses {
-    pub fn new(config: KakeboConfig) -> Self {
-        Self {
-            config,
-            single_expenses: Vec::new(),
-            group_expenses: Vec::new(),
-            recurring_expenses: Vec::new(),
-            debts_owed: Vec::new(),
-            unpaid_advancements: Vec::new(),
-        }
+    pub fn all_people(&self) -> impl Iterator<Item = String> + use<'_> {
+        self.group_expenses
+            .iter()
+            .flat_map(|group| group.people.iter())
+            .chain(self.debts_owed.iter().map(|debt| &debt.person))
+            .chain(self.unpaid_advancements.iter().map(|advc| &advc.person))
+            .chain(self.overflows.keys())
+            .map(String::clone)
     }
 
     pub fn print_status(&self) {
@@ -196,34 +197,28 @@ impl Expenses {
                 .and_modify(|val| *val += advancement.amount)
                 .or_insert(advancement.amount);
         }
+        for (person, overflow) in &self.overflows {
+            user_owes_people
+                .entry(person)
+                .and_modify(|val| *val += overflow)
+                .or_insert(*overflow);
+        }
 
-        let all_people: BTreeSet<_> = self
-            .group_expenses
-            .iter()
-            .flat_map(|group| group.people.iter().map(String::as_str))
-            .chain(self.debts_owed.iter().map(|debt| debt.person.as_str()))
-            .chain(
-                self.unpaid_advancements
-                    .iter()
-                    .map(|advc| advc.person.as_str()),
-            )
-            .collect();
-
+        let all_people: BTreeSet<_> = self.all_people().collect();
+        println!("             they owe   you owe          balance");
         for person in all_people {
-            let good = people_owe_user.get(person).map_or(Decimal::ZERO, |r| *r);
-            let bad = user_owes_people.get(person).map_or(Decimal::ZERO, |r| *r);
+            let good = people_owe_user
+                .get(person.as_str())
+                .map_or(Decimal::ZERO, |r| *r);
+            let bad = user_owes_people
+                .get(person.as_str())
+                .map_or(Decimal::ZERO, |r| *r);
             let balance = good - bad;
             println!(
-                "  {:10} {ANSI_GREEN}{:8.2} {ANSI_RED}{:8.2}{ANSI_STOP}  TOTAL: {:+8.2}",
+                "  {:10} {ANSI_RED}{:8.2}{ANSI_STOP}, {ANSI_GREEN}{:8.2}{ANSI_STOP}, TOTAL: {:+8.2}",
                 person, good, bad, balance
             );
         }
-    }
-}
-
-impl Default for Expenses {
-    fn default() -> Self {
-        Self::new(KakeboConfig::default())
     }
 }
 
@@ -390,16 +385,13 @@ fn run() -> Result<(), KakeboError> {
     };
     let path = Path::new(&path.inner);
 
+    // NOTE: this is a way to update the file format, I leave this as reference
+    // transform::<OldExpenses, Expenses>(path)?;
+    // return Ok(());
+
     let mut expenses: Expenses = parse_file(path)?;
     let mut environment = Environment {
-        people: expenses
-            .group_expenses
-            .iter()
-            .flat_map(|group| group.people.iter())
-            .chain(expenses.debts_owed.iter().map(|debt| &debt.person))
-            .chain(expenses.unpaid_advancements.iter().map(|advc| &advc.person))
-            .map(String::clone)
-            .collect(),
+        people: expenses.all_people().collect(),
     };
 
     if args.debug {
@@ -556,11 +548,116 @@ fn run() -> Result<(), KakeboError> {
             }
         }
         Command::Receive { value, from } => {
-            if let Some(src) = from {
-                todo!("Receive {} from {}", value, src)
+            let source_person = if let Some(src) = from {
+                if environment.people.contains(&src) {
+                    src
+                } else {
+                    return Err(KakeboError::InvalidArgument(format!(
+                        "Cannot receive {} from {}, {} does not exist",
+                        value, src, src
+                    )));
+                }
             } else {
-                todo!("Receive {}", value);
+                let options = environment.people.iter().map(|s| s.to_string()).collect();
+                Select::new("Who did you receive this money from?", options).prompt()?
+            };
+            if value < Decimal::ZERO {
+                return Err(KakeboError::InvalidArgument(format!(
+                    "Cannot receive {} from {}, {} is negative",
+                    value, source_person, value
+                )));
             }
+            let mut this_value = value;
+            let mut overflow = *expenses
+                .overflows
+                .get(&source_person)
+                .unwrap_or(&Decimal::ZERO);
+            let mut any_change = false;
+            while this_value + overflow > Decimal::ZERO {
+                // TODO: implement non-group expense behaviour
+                let options: Vec<_> = expenses
+                    .group_expenses
+                    .iter_mut()
+                    .rev()
+                    .flat_map(|group_expense| {
+                        group_expense.parts().filter(|part| {
+                            part.person == source_person
+                                && part.to_pay > part.paid.unwrap_or(Decimal::ZERO)
+                        })
+                    })
+                    .collect();
+                println!(
+                    "There is {} + {} = {} unassigned",
+                    this_value,
+                    overflow,
+                    this_value + overflow
+                );
+                let pay_off_option =
+                    Select::new("Which group expense did this pay?", options).prompt();
+                if let Err(inquire::InquireError::OperationCanceled) = pay_off_option {
+                    break;
+                }
+                let part = pay_off_option?;
+                let mut possible_targets = expenses
+                    .group_expenses
+                    .iter_mut()
+                    .filter(|group_expense| group_expense.info == part.info);
+                let group_expense: &mut GroupExpense = possible_targets
+                    .next()
+                    .expect("We previously checked for this existence");
+                assert!(
+                    possible_targets.next().is_none(),
+                    "Our implementation is invalid if ExpenseInfo is not unique"
+                );
+
+                let mut still_to_pay = part.to_pay - part.paid.unwrap_or(Decimal::ZERO);
+                let mut paying = Decimal::ZERO;
+
+                let non_overflow_part = this_value.min(still_to_pay);
+                this_value -= non_overflow_part;
+                paying += non_overflow_part;
+                still_to_pay -= non_overflow_part;
+
+                if !still_to_pay.is_zero() {
+                    let overflow_part = overflow.min(still_to_pay);
+                    overflow -= overflow_part;
+                    paying += overflow_part;
+                    still_to_pay -= overflow_part;
+                }
+
+                let now_paid = part.paid.unwrap_or(Decimal::ZERO) + paying;
+                group_expense.paid_amounts[part.index] = Some(now_paid);
+                any_change = true;
+            }
+            let new_overflow = this_value + overflow;
+            if new_overflow
+                != *expenses
+                    .overflows
+                    .get(&source_person)
+                    .unwrap_or(&Decimal::ZERO)
+            {
+                expenses.overflows.insert(source_person, new_overflow);
+                any_change = true;
+            }
+            any_change
+        }
+        Command::Sanitize => {
+            for group_expense in expenses.group_expenses.iter_mut() {
+                for (i, to_pay) in group_expense.true_amounts().into_iter().enumerate() {
+                    let person = group_expense.people[i].clone();
+                    let paid = group_expense.paid_amounts[i].unwrap_or(Decimal::ZERO);
+                    if paid > to_pay {
+                        group_expense.paid_amounts[i] = Some(to_pay);
+                        let overflow = paid - to_pay;
+                        expenses
+                            .overflows
+                            .entry(person)
+                            .and_modify(|mut v| v += overflow)
+                            .or_insert(overflow);
+                    }
+                }
+            }
+            true
         }
     };
 

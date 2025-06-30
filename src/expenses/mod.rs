@@ -52,7 +52,7 @@ pub fn person(prompt: &str, people: &BTreeSet<String>) -> InquireResult<String> 
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExpenseInfo {
     pub category: ExpenseCategory,
     pub description: Option<String>,

@@ -12,6 +12,28 @@ use crate::{
 use super::{money_amount, person, ExpenseInfo, NEW_PERSON};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GroupExpensePart {
+    pub index: usize,
+    pub info: ExpenseInfo,
+    pub person: String,
+    pub paid: Option<Decimal>,
+    pub to_pay: Decimal,
+}
+
+impl Display for GroupExpensePart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} - {} {:8.2} (paid: {:8.2})",
+            self.info,
+            self.person,
+            self.to_pay,
+            self.paid.unwrap_or(Decimal::ZERO)
+        )
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// a group expense that distributes extra costs such as tips or delivery fees fairly
 pub struct GroupExpense {
     pub info: ExpenseInfo,
@@ -54,6 +76,21 @@ impl GroupExpense {
 
     pub fn true_user_amount(&self) -> Decimal {
         self.true_amount(self.raw_user_amount)
+    }
+
+    pub fn parts(&self) -> impl Iterator<Item = GroupExpensePart> + use<'_> {
+        self.people
+            .iter()
+            .zip(self.true_amounts())
+            .zip(&self.paid_amounts)
+            .enumerate()
+            .map(|(i, ((person, to_pay), paid))| GroupExpensePart {
+                index: i,
+                info: self.info.clone(),
+                person: person.to_string(),
+                paid: *paid,
+                to_pay,
+            })
     }
 
     pub fn true_amounts(&self) -> Vec<Decimal> {
