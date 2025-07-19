@@ -353,25 +353,67 @@ impl Display for DisplayPath {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct PathCache {
+    data: Vec<String>,
+}
+
 fn run() -> Result<(), KakeboError> {
     let args = Args::parse();
 
     let search_dir = dirs::home_dir().expect("Resolve home directory");
-    let mut possible_paths = Vec::new();
 
-    for entry in WalkDir::new(search_dir)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let filename = entry.file_name().to_string_lossy();
+    let cache_path = search_dir.join(".kakebo-cache");
+    let cached_possible_paths: Option<Vec<_>> = if cache_path.exists() {
+        let cache = std::fs::read_to_string(&cache_path)?;
+        let possible_paths: PathCache = toml::from_str(&cache)?;
+        Some(
+            possible_paths
+                .data
+                .into_iter()
+                .map(|s| DisplayPath {
+                    inner: Path::new(&s).to_owned(),
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
 
-        if filename.ends_with(".kakebo") {
-            possible_paths.push(DisplayPath {
-                inner: entry.path().to_owned(),
-            });
+    let cache_is_valid = if let Some(cached_paths) = &cached_possible_paths {
+        cached_paths
+            .iter()
+            .all(|display_path| display_path.inner.exists())
+    } else {
+        false
+    };
+
+    let mut possible_paths = if cache_is_valid {
+        cached_possible_paths.unwrap()
+    } else {
+        let mut possible_paths = Vec::new();
+        for entry in WalkDir::new(search_dir)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let filename = entry.file_name().to_string_lossy();
+
+            if filename.ends_with(".kakebo") {
+                possible_paths.push(DisplayPath {
+                    inner: entry.path().to_owned(),
+                });
+            }
         }
-    }
+        let cache: Vec<String> = possible_paths
+            .iter()
+            .map(|display_path| display_path.inner.to_string_lossy().into_owned())
+            .collect();
+        let cache = PathCache { data: cache };
+        let cache_str = toml::to_string_pretty(&cache)?;
+        std::fs::write(&cache_path, cache_str)?;
+        possible_paths
+    };
 
     let path = match possible_paths.len() {
         0 => {
