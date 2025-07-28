@@ -505,7 +505,7 @@ fn run() -> Result<(), KakeboError> {
             // TODO: debts owed and advancements
             let overflow = expenses.overflows.get(&person).unwrap_or(&Decimal::ZERO);
             total_overflow += overflow;
-            println!("  {} overflow: {:8.2}", person, overflow);
+            println!("  {} {:8.2} overflow", person, overflow);
             println!("             they owe   you owe          balance");
             println!(
                 "  {:10} {ANSI_RED}{:8.2}{ANSI_STOP}, {ANSI_GREEN}{:8.2}{ANSI_STOP}, TOTAL: {:+8.2}",
