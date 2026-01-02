@@ -17,6 +17,17 @@ pub mod single_expense;
 
 pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal> {
     CustomType::new(&format!("Amount {name}:"))
+        .with_parser(&|input: &str| {
+            let mut sum = Decimal::ZERO;
+            for part in input.split('+') {
+                let part = part.trim();
+                let parse_result = part.parse::<Decimal>();
+                let parsed_decimal = parse_result.map_err(|_| ())?;
+                let checked_sum = sum.checked_add(parsed_decimal);
+                sum = checked_sum.ok_or(())?;
+            }
+            Ok(sum)
+        })
         .with_validator(|&input: &Decimal| {
             if input > Decimal::ZERO {
                 Ok(Validation::Valid)
@@ -27,7 +38,7 @@ pub fn money_amount(config: &KakeboConfig, name: &str) -> InquireResult<Decimal>
             }
         })
         .with_formatter(&|decimal: Decimal| format!("{:.2}{}", decimal, config.currency))
-        .with_error_message("Please type a valid number")
+        .with_error_message("Please type a valid number or sum of valid numbers")
         .with_help_message(&format!(
             "Type the amount in {} using a decimal point as a separator",
             config.currency
