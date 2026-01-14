@@ -220,8 +220,13 @@ impl Expenses {
                 .get(person.as_str())
                 .map_or(Decimal::ZERO, |r| *r);
             let balance = good - bad;
+            let balance_color = if Decimal::abs(&balance) >= Decimal::from(5) {
+                ANSI_RED
+            } else {
+                ANSI_GREEN
+            };
             println!(
-                "  {:10} {ANSI_RED}{:8.2}{ANSI_STOP}, {ANSI_GREEN}{:8.2}{ANSI_STOP}, TOTAL: {:+8.2}",
+                "  {:10} {:8.2}, {:8.2}, TOTAL: {balance_color}{:+8.2}{ANSI_STOP}",
                 person, good, bad, balance
             );
         }
@@ -510,9 +515,15 @@ fn run() -> Result<(), KakeboError> {
             total_overflow += overflow;
             println!("  {} {:8.2} overflow", person, overflow);
             println!("             they owe   you owe          balance");
+            let balance = total_owed - total_overflow;
+            let balance_color = if Decimal::abs(&balance) >= Decimal::from(5) {
+                ANSI_RED
+            } else {
+                ANSI_GREEN
+            };
             println!(
-                "  {:10} {ANSI_RED}{:8.2}{ANSI_STOP}, {ANSI_GREEN}{:8.2}{ANSI_STOP}, TOTAL: {:+8.2}",
-                person, total_owed, total_overflow, total_owed - total_overflow
+                "  {:10} {:8.2}, {:8.2}, TOTAL: {balance_color}{:+8.2}{ANSI_STOP}",
+                person, total_owed, total_overflow, balance
             );
 
             false
@@ -552,9 +563,15 @@ fn run() -> Result<(), KakeboError> {
             total_overflow += overflow;
             println!("  {} {:8.2} overflow", person, overflow);
             println!("             they owe   you owe          balance");
+            let balance = total_owed - total_overflow;
+            let balance_color = if Decimal::abs(&balance) >= Decimal::from(5) {
+                ANSI_RED
+            } else {
+                ANSI_GREEN
+            };
             println!(
-                "  {:10} {ANSI_RED}{:8.2}{ANSI_STOP}, {ANSI_GREEN}{:8.2}{ANSI_STOP}, TOTAL: {:+8.2}",
-                person, total_owed, total_overflow, total_owed - total_overflow
+                "  {:10} {:8.2}, {:8.2}, TOTAL: {balance_color}{:+8.2}{ANSI_STOP}",
+                person, total_owed, total_overflow, balance
             );
 
             false
