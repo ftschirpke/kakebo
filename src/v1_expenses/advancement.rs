@@ -14,7 +14,7 @@ pub struct Advancement {
     pub person: String,
     pub amount: Decimal,
     description: Option<String>,
-    date: NaiveDate,
+    pub date: NaiveDate,
     creation_date: NaiveDate,
 }
 

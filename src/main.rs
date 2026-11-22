@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeSet, HashMap},
     fmt::Display,
     fs::File,
+    io::Write,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -15,16 +16,20 @@ use inquire::{Confirm, Password, Select};
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::to_writer;
 use walkdir::WalkDir;
 
 use self::errors::KakeboError;
-use expenses::{
+use file_management::file_writer_from_naive_date;
+use v1_expenses::{
     advancement::Advancement, debt::Debt, group_expense::GroupExpense,
     recurring_expense::RecurringExpense, single_expense::SingleExpense,
 };
 
+mod entries;
 mod errors;
-mod expenses;
+mod file_management;
+mod v1_expenses;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KakeboConfig {
@@ -366,7 +371,7 @@ struct PathCache {
     data: Vec<String>,
 }
 
-fn run() -> Result<(), KakeboError> {
+fn v1_run() -> Result<(), KakeboError> {
     let args = Args::parse();
 
     let search_dir = dirs::home_dir().expect("Resolve home directory");
@@ -814,6 +819,52 @@ fn run() -> Result<(), KakeboError> {
         }
     };
 
+    let root_path = Path::new("testing-dir");
+    let new_line = b"\n";
+    println!("===== SINGLES ({}) =====", expenses.single_expenses.len());
+    for e in expenses.single_expenses.iter() {
+        let mut writer = file_writer_from_naive_date(root_path, "single", &e.info.date).expect("A");
+        serde_json::to_writer(&mut writer, e)?;
+        writer.write(new_line)?;
+    }
+    println!("===== GROUPS ({}) =====", expenses.group_expenses.len());
+    for e in expenses.group_expenses.iter() {
+        let mut writer = file_writer_from_naive_date(root_path, "group", &e.info.date).expect("B");
+        serde_json::to_writer(&mut writer, e)?;
+        writer.write(new_line)?;
+    }
+    println!(
+        "===== RECURRING ({}) =====",
+        expenses.recurring_expenses.len()
+    );
+    for e in expenses.recurring_expenses.iter() {
+        let mut writer =
+            file_writer_from_naive_date(Path::new("."), "recurring", &e.info.date).expect("C");
+        serde_json::to_writer(&mut writer, e)?;
+        writer.write(new_line)?;
+    }
+    println!("===== DEBTS ({}) =====", expenses.debts_owed.len());
+    for e in expenses.debts_owed.iter() {
+        let mut writer =
+            file_writer_from_naive_date(Path::new("."), "debts", &e.expense.info.date).expect("D");
+        serde_json::to_writer(&mut writer, e)?;
+        writer.write(new_line)?;
+    }
+    println!(
+        "===== ADVANCEMENTS ({}) =====",
+        expenses.unpaid_advancements.len()
+    );
+    for e in expenses.unpaid_advancements.iter() {
+        let mut writer =
+            file_writer_from_naive_date(Path::new("."), "advancements", &e.date).expect("E");
+        serde_json::to_writer(&mut writer, e)?;
+        writer.write(new_line)?;
+    }
+    println!("===== OVERFLOWS ({}) =====", expenses.overflows.len());
+    for (k, v) in expenses.overflows.iter() {
+        println!("{} -> {}", k, v);
+    }
+
     if !changes_made {
         return Ok(());
     }
@@ -829,7 +880,7 @@ fn run() -> Result<(), KakeboError> {
 }
 
 fn main() -> ExitCode {
-    let result = run();
+    let result = v1_run();
     if let Err(error) = result {
         println!("{}", error);
         return ExitCode::FAILURE;

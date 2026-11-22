@@ -16,6 +16,8 @@ pub enum KakeboError {
     RmpDecode(#[from] rmp_serde::decode::Error),
     #[error("RMP encode error: {0}")]
     RmpEncode(#[from] rmp_serde::encode::Error),
+    #[error("Serde Json error: {0}")]
+    SerdeJson(#[from] serde_json::Error),
     #[error("Toml Serialization error: {0}")]
     TomlSerialization(#[from] toml::ser::Error),
     #[error("Toml Deserialization error: {0}")]
